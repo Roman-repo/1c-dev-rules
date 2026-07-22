@@ -1,0 +1,14 @@
+# OS
+.DS_Store
+Thumbs.db
+
+# Editor
+.idea/
+.vscode/
+*.swp
+*~
+
+# ZCode local state
+.zcode/plans/
+.zcode/cache/
+.zcode-plugin-seed.json

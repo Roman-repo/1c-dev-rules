@@ -1,0 +1,10 @@
+{
+  "$schema": "https://zcode.ai/schemas/workspace-config.json",
+  "_comment": "Конфигурация ZCode для проекта. Генерируется скилом 1c-project-bootstrap. Плarин 1c-dev-rules обычно подключается глобально через Settings → Plugin Management; этот файл — для workspace-scope переопределений.",
+  "plugins": {
+    "enabled": true,
+    "enabledPlugins": {
+      "1c-dev-rules@1c-dev-rules": true
+    }
+  }
+}
