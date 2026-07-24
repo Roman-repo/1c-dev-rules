@@ -1,0 +1,11 @@
+{
+  "name": "1c-dev-rules",
+  "version": 1,
+  "plugins": [
+    {
+      "name": "1c-dev-rules",
+      "source": ".",
+      "version": "0.1.0"
+    }
+  ]
+}
