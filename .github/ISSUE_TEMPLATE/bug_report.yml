@@ -1,0 +1,53 @@
+name: 🐞 Баг / неточность
+description: Скил сработал неверно, правило устарело, битая ссылка или опечатка
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Спасибо, что нашли время сообщить! Чем точнее описание, тем быстрее починим.
+
+  - type: input
+    id: skill
+    attributes:
+      label: Какой скил / reference
+      description: Имя скила (`1c-<name>`) или файла (`references/<file>.md`). Если проблема с триггером — укажите, при какой задаче.
+      placeholder: "1c-queries / references/queries-full.md"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: type
+    attributes:
+      label: Тип проблемы
+      options:
+        - Скил не сработал (under-trigger) — модель его не вызвала
+        - Скил сработал невовремя (over-trigger)
+        - Правило устарело / неточно
+        - Битая ссылка (404)
+        - Опечатка / формулировка
+        - Другое
+    validations:
+      required: true
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: Что произошло
+      description: Опишите симптомы. Если under-trigger — приведите формулировку задачи, на которой скил должен был сработать, но не сработал.
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Чего ожидали
+    validations:
+      required: true
+
+  - type: textarea
+    id: context
+    attributes:
+      label: Контекст
+      description: Версия плагина (`plugin.json` → version), ассистент (ZCode / Claude Code / Codex / Cursor), версия платформы 1С.
+      placeholder: "plugin 0.2.0, ZCode, 1С 8.3.12"

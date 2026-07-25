@@ -1,0 +1,7 @@
+# Скрывает пустой blank-issue; все вопросы — через шаблоны.
+# Подробнее: https://docs.github.com/en/communities/using-templates-to-encourage-useful-issues-and-pull-requests/configuring-issue-templates-for-your-repository#configuring-template-choices
+blank_issues_enabled: false
+contact_links:
+  - name: 💬 Вопрос / обсуждение
+    url: https://github.com/Roman-repo/1c-dev-rules/discussions
+    about: Для открытых вопросов, идей без конкретного действия, «как лучше сделать». Discussions — правильное место, не Issues.
