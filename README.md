@@ -1,8 +1,32 @@
 # 1c-dev-rules
 
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE)
+[![Version: 0.1.0](https://img.shields.io/badge/version-0.1.0-blue.svg)](./docs/CHANGELOG.md)
+[![Skills: 21](https://img.shields.io/badge/skills-21-green.svg)](#что-внутри)
+[![Platform: ZCode](https://img.shields.io/badge/platform-ZCode-purple.svg)](#как-подключить)
+[![1С:Предприятие 8](https://img.shields.io/badge/1С-Предприятие%208-red.svg)](https://v8.1c.ru)
+
 > Универсальный подключаемый набор правил разработки **1С:Предприятие 8** для ИИ-ассистентов. Основан на стандартах [v8std](https://github.com/zeegin/v8std) и адаптирован под реальные грабли продакшен-разработки.
 
 **Один плагин — много скилов.** Каждый скил = тематический набор правил с мини-чек-листом и развёрнутыми карточками в `references/` (progressive disclosure: скил в system-reminder короткий, детали подгружаются по требованию).
+
+> **EN:** Pluggable set of 1C:Enterprise 8 development rules for AI assistants (ZCode/Claude/Codex). Packaged as skills based on the [v8std](https://github.com/zeegin/v8std) standards. Full docs below are in Russian — 1C ecosystem is primarily Russian-speaking.
+
+## Оглавление
+
+- [Что это и зачем](#что-это-и-зачем)
+- [Чем это отличается от существующего](#чем-это-отличается-от-существующего)
+- [Что внутри](#что-внутри)
+- [Как это работает на практике](#как-это-работает-на-практике)
+- [Требования](#требования)
+- [Как подключить](#как-подключить)
+- [Другие ассистенты](#другие-ассистенты-claude-code-codex-cursor)
+- [Архитектура и пример скила](#архитектура-и-пример-скила)
+- [Если что-то не работает (FAQ)](#если-что-то-не-работает-faq)
+- [Лицензия и источники](#лицензия-и-источники)
+- [Статус и roadmap](#статус-и-roadmap)
+- [Обратная связь](#обратная-связь)
+- [Контрибьюции](#контрибьюции)
 
 ## Что это и зачем
 
@@ -95,7 +119,7 @@
 
 - **ZCode** — любая версия с поддержкой plugins и skills (формат `.zcode-plugin/plugin.json`).
 - **Модель** — любая, поддерживающая механизм skills (ZCode с моделями GLM/Claude/GPT — все работают).
-- **Для Claude Code / Codex / Cursor** — см. раздел [«Другие ассистенты»](#другие-ассистенты-claude-codex-cursor) ниже.
+- **Для Claude Code / Codex / Cursor** — см. раздел [«Другие ассистенты»](#другие-ассистенты-claude-code-codex-cursor) ниже.
 
 ## Как подключить
 
@@ -143,7 +167,7 @@ git clone https://github.com/Roman-repo/1c-dev-rules ~/Projects/1c-dev-rules
 
 > ⚠️ На сегодня **протестировано только в ZCode**. Для Claude Code/Codex/Cursor формальная совместимость есть, но триггеры не проверялись в реальных клиентах.
 
-## Архитектура набора
+## Архитектура и пример скила
 
 ```
 1c-dev-rules/
@@ -158,7 +182,57 @@ git clone https://github.com/Roman-repo/1c-dev-rules ~/Projects/1c-dev-rules
 
 Принцип: **универсальные правила здесь, проектная специфика — в `AGENTS.md` проекта**. Скилы не содержат упоминаний конкретных конфигураций (`торо_`, `Project/Toir`) — только универсальные правила и примеры.
 
-Подробно — в [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md).
+### Как устроен один скил (`SKILL.md`)
+
+```markdown
+---
+name: 1c-queries
+description: Запросы 1С, СКД, динамические списки. Use when writing/reviewing
+  query/DCS/dynamic-list code: №733 (СрезПоследних с параметрами), №655 (нет ВТ
+  в соединении). Мини-чек-лист в конце.
+when_to_use: При написании или ревью запросов. Триггеры: "СрезПоследних",
+  "ЛЕВОЕ СОЕДИНЕНИЕ", "ВЫБРАТЬ *".
+license: MIT
+---
+
+# 1c-queries — запросы, СКД
+
+## Краткая сводка критичных правил
+...мини-сводка стандартов...
+
+## Мини-чек-лист
+- [ ] правило 1
+...
+
+## Детали (читать по необходимости)
+- references/queries-full.md — полная карточка (17 стандартов)
+```
+
+Правила оформления скилов (поля frontmatter, длина description, очистка от проектной специфики) — в [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md).
+
+## Если что-то не работает (FAQ)
+
+### Поставил плагин, а скилы не появились в system-reminder
+
+1. **Проверьте, что плагин включён:** Settings → Plugin Management — должен быть в списке со статусом enabled.
+2. **Запустите диагностику ZCode:**
+   - `/zcode-guide:diagnosing-plugins` — корректность установки плагина (манифест, путь, включён ли).
+   - `/zcode-guide:diagnosing-skills` — корректность обнаружения скилов (frontmatter, `description` ≤1024 симв., `name` совпадает с каталогом).
+3. **Перезапустите сессию** — список скилов строится в начале хода; после установки нового плагина нужен новый сеанс.
+4. **Проверьте права:** плагин должен быть включён для текущего workspace или глобально (см. `~/.zcode/cli/config.json` → `plugins.enabledPlugins`).
+
+### Скилы появляются, но не триггерятся автоматически
+
+- `description` — главный триггер. Если скил under-triggers, проверьте, что описание начинается с «Use when…» и содержит конкретные сигналы. Лимит — первые ~250 символов; всё важное должно быть в начале.
+- Можно вызвать скил явно: `/1c-queries` или через меню `/` → Skills.
+
+### Скил загрузился, но контент не соответствует моему проекту
+
+Это задумка: скилы **универсальны** (без привязки к конкретной конфигурации). Проектная специфика (префикс, карты объектов, каноничные чтения) должна лежать в `AGENTS.md` вашего проекта. Сгенерировать его: `/1c-project-bootstrap`.
+
+### Хочу отключить часть скилов
+
+В `~/.zcode/cli/config.json` → `plugins.enabledPlugins` укажите плагин как `false`, либо используйте UI: Settings → Plugin Management → отключить.
 
 ## Лицензия и источники
 
@@ -169,12 +243,24 @@ git clone https://github.com/Roman-repo/1c-dev-rules ~/Projects/1c-dev-rules
 - **[comol/ai_rules_1c](https://github.com/comol/ai_rules_1c)** — practice-карточки (public domain)
 - **[Nikolay-Shirokov/cc-1c-skills](https://github.com/Nikolay-Shirokov/cc-1c-skills)** — спецификации форматов 1С
 
-## Статус
+## Статус и roadmap
 
-✅ **Опубликован, v0.1.0.** 21 скил + 28 references + 15 std готовы и провалидированы. Работает в ZCode.
-🧪 **Тестируется** совместимость с Claude Code / Codex / Cursor.
+**Текущий: ✅ v0.1.0** — 21 скил + 28 references + 15 std готовы и провалидированы. Работает в ZCode.
+
+| Статус | Что |
+|---|---|
+| ✅ Готово | Каркас плагина, 21 скил, публикация на GitHub |
+| 🧪 Тестируется | Совместимость с Claude Code / Codex / Cursor |
+| 📋 Планируется (v0.2) | Тестирование на реальных проектах; миграция исходного проекта-донора; проверка триггеров в Claude Code |
+| 💡 Идеи (v0.3+) | Локализация карточек на английский; скрипты автопроверки структуры; интеграция с BSL Language Server |
 
 Журнал версий — [docs/CHANGELOG.md](./docs/CHANGELOG.md).
+
+## Обратная связь
+
+- 🐛 **Баги, проблемы, идеи** — [GitHub Issues](https://github.com/Roman-repo/1c-dev-rules/issues). Перед созданием проверьте, что баг воспроизводим; приложите вывод `/zcode-guide:diagnosing-skills` если вопрос про скилы.
+- 💬 **Вопросы, обсуждения** — [GitHub Discussions](https://github.com/Roman-repo/1c-dev-rules/discussions) (если включены) или Issues с пометкой «question».
+- 🔀 **Вклад** — см. раздел [Контрибьюции](#контрибьюции) ниже.
 
 ## Контрибьюции
 
