@@ -1,7 +1,7 @@
 # Карточка: Права доступа и безопасность
 
 > Ключевые стандарты [v8std](https://github.com/zeegin/v8std) по безопасности.
-> Полный список раздела — в [`standarts/std/security.md`](../../standarts/std/security.md).
+> Полный список раздела — в [`std/security.md`](../../../std/security.md).
 
 ---
 

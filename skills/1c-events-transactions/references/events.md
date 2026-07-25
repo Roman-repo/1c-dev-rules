@@ -1,7 +1,7 @@
 # Карточка: Обработчики событий
 
 > Ключевые стандарты [v8std](https://github.com/zeegin/v8std) по обработчикам событий объектов и форм.
-> Полный список раздела — в [`standarts/std/events.md`](../../standarts/std/events.md).
+> Полный список раздела — в [`std/events.md`](../../../std/events.md).
 
 ---
 

@@ -23,7 +23,7 @@
 | [**Rule of Three**](https://github.com/zeegin/v8std/blob/main/docs/patterns/engineering/rule-of-three/index.md) | Обобщать стоит после устойчивого повторения | Не выносите ли абстракцию слишком рано |
 | [**Separation of Concerns**](https://github.com/zeegin/v8std/blob/main/docs/patterns/engineering/separation-of-concerns/index.md) | Разделяйте разные типы задач по слоям | Не смешаны ли UI, бизнес-логика и доступ к данным |
 
-→ **Связь со стандартами:** Separation of Concerns прямо отсылает к [№487](https://github.com/zeegin/v8std/blob/main/docs/std/487.md) (минимизация серверных вызовов) и [№737](https://github.com/zeegin/v8std/blob/main/docs/std/737.md) (проверка прав). См. также [retrieval-rules.md](./retrieval-rules.md).
+→ **Связь со стандартами:** Separation of Concerns прямо отсылает к [№487](https://github.com/zeegin/v8std/blob/main/docs/std/487.md) (минимизация серверных вызовов) и [№737](https://github.com/zeegin/v8std/blob/main/docs/std/737.md) (проверка прав). См. также скил `1c-dispatch-gate` → `retrieval-rules`.
 
 ---
 

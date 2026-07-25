@@ -1,7 +1,7 @@
 # Карточка: Локализация и многоязычность
 
 > Ключевые стандарты [v8std](https://github.com/zeegin/v8std) по локализации.
-> Полный список раздела — в [`standarts/std/localization.md`](../../standarts/std/localization.md).
+> Полный список раздела — в [`std/localization.md`](../../../std/localization.md).
 >
 > ℹ️ В проект многоязычность используется (есть `en`, `es` синонимы) — раздел релевантен.
 

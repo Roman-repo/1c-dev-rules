@@ -1,7 +1,7 @@
 # Карточка: Отчёты и печатные формы
 
 > Ключевые стандарты [v8std](https://github.com/zeegin/v8std) по отчётам и печати.
-> Полный список раздела — в [`standarts/std/reports.md`](../../standarts/std/reports.md).
+> Полный список раздела — в [`std/reports.md`](../../../std/reports.md).
 
 ---
 

@@ -241,10 +241,10 @@ properties: commandBarLocation=None, windowOpeningMode=LockWholeInterface
 
 ## Связанные карточки
 
-- [Скелеты модулей](./module-templates.md) — какие `#Область` писать в коде формы
-- [Создание новых форм](./typical-forms-new.md) — структура, проверка заполнения, `modifiesStoredData`
-- [Грабли XML метаданных](./metadata-xml.md) — проверки структуры Form.form
-- [Формы](../forms.md) — стандарты событий и клиентского кода
+- Скил `1c-metadata` → `module-templates` — какие `#Область` писать в коде формы
+- Скил `1c-forms` → `typical-forms-new` — структура, проверка заполнения, `modifiesStoredData`
+- Скил `1c-metadata` → `metadata-xml` — проверки структуры Form.form
+- Скил `1c-forms` — стандарты событий и клиентского кода
 
 ## Источник
 

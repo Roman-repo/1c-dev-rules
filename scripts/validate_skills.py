@@ -38,6 +38,9 @@ NAME_PREFIX = "1c-"
 KEBAB_RE = re.compile(r"^[a-z0-9]+(-[a-z0-9]+)*$")
 FORBIDDEN_TOKENS = ("торо_", "гкс_", "Project/Toir")
 REF_LINK_RE = re.compile(r"references/([A-Za-z0-9_.\-]+\.md)")
+# Все markdown-ссылки [text](target) — для проверки относительных путей «наружу»
+# (http/https/mailto/#anchor отсеиваются отдельно; references/ уже покрывает REF_LINK_RE)
+MD_LINK_RE = re.compile(r"\]\(([^)]+)\)")
 
 
 # --- результат проверки ---------------------------------------------------
@@ -118,7 +121,11 @@ def parse_frontmatter(text: str) -> Tuple[Optional[Dict[str, str]], Optional[str
 
 # --- проверки -------------------------------------------------------------
 
-def validate_skill(skill_dir: Path, global_refs: Optional[Dict[str, str]] = None) -> SkillReport:
+def validate_skill(
+    skill_dir: Path,
+    global_refs: Optional[Dict[str, str]] = None,
+    global_md: Optional[Dict[str, List[Path]]] = None,
+) -> SkillReport:
     name = skill_dir.name
     rep = SkillReport(name=name)
     skill_md = skill_dir / "SKILL.md"
@@ -217,6 +224,43 @@ def validate_skill(skill_dir: Path, global_refs: Optional[Dict[str, str]] = None
     for ref in sorted(actual - referenced):
         rep.warn(f"references/{ref} не упоминается в SKILL.md (мёртвый файл?)")
 
+    # внешние относительные markdown-ссылки во ВСЕХ .md каталога скила
+    # (SKILL.md + references/*.md): ../../std/foo.md, ./sibling.md, ../forms.md —
+    # должны существовать. Ловит класс багов «standarts/std/ → std/», неверная глубина.
+    #
+    # Резолвинг в 3 захода (набор скилов по-разному ссылается на одно и то же):
+    #   1) точный относительный путь, как написано (../../std/queries.md);
+    #   2) basename в том же каталоге (соседние references: ./foo.md, ../foo.md);
+    #   3) basename в std/ (оглавления v8std: ../queries.md → std/queries.md).
+    repo_root = skill_dir.parent.parent  # skills/../ = корень плагина
+    global_md = global_md or {}  # {basename: [абсолютные пути]} по всему репо
+    all_md = sorted(skill_dir.rglob("*.md"))
+    for md_path in all_md:
+        md_text = md_path.read_text(encoding="utf-8")
+        for link in MD_LINK_RE.findall(md_text):
+            target = link.split("#")[0].split(" ")[0]  # отбрасываем anchor и title
+            if not target or target.startswith(("http://", "https://", "mailto:")):
+                continue
+            if target.startswith("references/"):
+                continue  # уже проверено блоком выше
+            if not target.endswith(".md"):
+                continue  # не markdown — не наше (картинки, .bsl и пр.)
+
+            basename = Path(target).name
+            candidates = [
+                (md_path.parent / target).resolve(),           # как написано
+            ]
+            # + файлы с тем же basename по всему репо (cross-skill, std/)
+            for abs_path in global_md.get(basename, []):
+                candidates.append(abs_path.resolve())
+            # также пробуем basename в std/ явно (если ../foo.md — частый паттерн)
+            std_candidate = repo_root / "std" / basename
+            if std_candidate not in candidates:
+                candidates.append(std_candidate)
+
+            if not any(c.is_file() for c in candidates):
+                rep.err(f"{md_path.relative_to(skill_dir)}: битая ссылка '{link}' → {target}")
+
     return rep
 
 
@@ -255,11 +299,19 @@ def main(argv: List[str]) -> int:
                 # если имя дублируется в нескольких скилах — фиксируем первого
                 global_refs.setdefault(p.name, d.name)
 
+    # Глобальный индекс ВСЕХ .md репозитория: {basename -> [пути]}.
+    # Нужен для умного резолвинга ссылок между карточками и в std/.
+    global_md: Dict[str, List[Path]] = {}
+    for p in root.rglob("*.md"):
+        if ".git" in p.parts:
+            continue
+        global_md.setdefault(p.name, []).append(p)
+
     print(f"Проверка {len(skill_dirs)} скилов в {skills_dir}")
     total_err = 0
     total_warn = 0
     for d in skill_dirs:
-        rep = validate_skill(d, global_refs=global_refs)
+        rep = validate_skill(d, global_refs=global_refs, global_md=global_md)
         for line in fmt(rep):
             print(line)
         total_err += len(rep.errors)

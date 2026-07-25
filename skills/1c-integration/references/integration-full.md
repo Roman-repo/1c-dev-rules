@@ -1,7 +1,7 @@
 # Карточка: Интеграция и обмен данными
 
 > Ключевые стандарты [v8std](https://github.com/zeegin/v8std) по интеграции.
-> Полный список раздела — в [`standarts/std/integration.md`](../../standarts/std/integration.md).
+> Полный список раздела — в [`std/integration.md`](../../../std/integration.md).
 
 ---
 

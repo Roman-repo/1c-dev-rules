@@ -1,0 +1,29 @@
+# CI: автопроверка структуры скилов и юнит-тесты валидатора.
+# Запускается на каждый push в main и на каждый PR.
+# Битовая структура скилов или сломанный валидатор не попадут в main.
+name: validate
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      # 1. Линтер структуры скилов: frontmatter, длины, ссылки, специфика.
+      - name: Run validate_skills.py
+        run: python3 scripts/validate_skills.py
+
+      # 2. Юнит-тесты самого валидатора (fixtures + интеграция на skills/).
+      - name: Run validator tests
+        run: python3 -m unittest tests.test_validate_skills -v

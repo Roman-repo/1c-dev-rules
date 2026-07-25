@@ -119,7 +119,7 @@
 | M8 | **TabularSections — корректная структура** | `tabularSections` содержит `attributes` с UUID/имя/тип. **Не** содержит `LineNumber` в `standardAttributes` (платформа добавляет сама) | Явный `LineNumber` → дублирование, ошибка |
 | M9 | **Согласованность свойств** | `AccountingRegister` имеет `chartOfAccounts`; `CalculationRegister` — `chartOfCalculationTypes`; `EventSubscription` — `handler` (формат `CommonModule.Имя.Процедура`); `ScheduledJob` — `methodName` | Пустое обязательное поле → ошибка при загрузке |
 | M10 | **Command — Group обязателен** | Каждая `commands` имеет `_group` (или корректную ссылку на `CommandGroup.Имя`). Тип параметра секционной группы несовместим с `CommandParameterType` | Команда без группы → 1С отвергает при загрузке |
-| M11 | **Роли на новый объект (№532)** | Объект присутствует хотя бы в одном `<путь к src>/Roles/*/Rights.rights`: `grep -rl "Constant.Имя\|InformationRegister.Имя\|Catalog.Имя" <путь к src>/Roles/`. Для регистра/справочника — права и на измерения/реквизиты (`Dimension.Имя`, `Attribute.Имя`) | Нет ролей → объект невидим стандартным пользователям (инцидент Б6) |
+| M11 | **Роли на новый объект (№532)** | Объект присутствует хотя бы в одном `<путь к src>/Roles/*/Rights.rights`: `grep -rl "Constant.Имя\|InformationRegister.Имя\|Catalog.Имя" <путь к src>/Roles/`. Для регистра/справочника — права и на измерения/реквизиты (`Dimension.Имя`, `Attribute.Имя`) | Нет ролей → объект невидим стандартным пользователям |
 | M12 | **Регистр: свойства режима** | `writeMode` (`Independent`/`RecorderSubordinate`), `informationRegisterPeriodicity` (`Nonperiodic`/`RecorderPosition`/…), `editType` (`InDialog`/`Directly`), у измерений — `mainFilter`. Значения осмысленны и сверены с эталоном похожего регистра | Несоответствие режима → неверное чтение/запись (напр. набор записей нельзя отфильтровать по ресурсу) |
 | M13 | **Константа: тип и квалификаторы** | `<type>` с `types` и квалификаторами (`numberQualifiers`/`stringQualifiers`/`dateQualifiers`). Для числа — `precision`/`nonNegative`. Составной тип — по №728. Заполнение значения по умолчанию — осмысленное | Нет квалификаторов → платформа подставляет умолчания, могут не совпадать с бизнес-смыслом |
 
@@ -157,10 +157,10 @@ grep -oE '<segments>[^<]+</segments>' Forms/Форма/Form.form
 
 ## Связанные карточки
 
-- [Стандарты метаданных](../metadata.md) — правила метаданных уровня стандарта
-- [Скелеты модулей](./module-templates.md) — шаблоны модулей
-- [Типовые формы: создание новых](./typical-forms-new.md) — структура модуля формы, `modifiesStoredData`
-- [Типовые формы: доработка](./typical-forms-mod.md) — программная модификация форм
+- Скил `1c-metadata` — правила метаданных уровня стандарта
+- Скил `1c-metadata` → `module-templates` — шаблоны модулей
+- Скил `1c-forms` → `typical-forms-new` — структура модуля формы, `modifiesStoredData`
+- Скил `1c-forms` → `typical-forms-mod` — программная модификация форм
 
 ## Источники
 
