@@ -1,7 +1,7 @@
 # 1c-dev-rules
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE)
-[![Version: 0.2.0](https://img.shields.io/badge/version-0.2.0-blue.svg)](./docs/CHANGELOG.md)
+[![Version: 0.2.1](https://img.shields.io/badge/version-0.2.1-blue.svg)](./docs/CHANGELOG.md)
 [![Skills: 21](https://img.shields.io/badge/skills-21-green.svg)](#что-внутри)
 [![Platform: ZCode](https://img.shields.io/badge/platform-ZCode-purple.svg)](#как-подключить)
 [![1С:Предприятие 8](https://img.shields.io/badge/1С-Предприятие%208-red.svg)](https://v8.1c.ru)
@@ -245,7 +245,7 @@ license: MIT
 
 ## Статус и roadmap
 
-**Текущий: ✅ v0.2.0** — 21 скил + 28 references + 15 std + автоварификатор (validate_skills.py) + CI + тесты. Карточки обезличены, без привязки к конкретным конфигурациям.
+**Текущий: ✅ v0.2.1** — 21 скил + 28 references + 15 std + автоварификатор (validate_skills.py) + CI + тесты. Карточки обезличены, без привязки к конкретным конфигурациям. `1c-code-review` усилен рубрикатором high-risk patterns.
 
 | Статус | Что |
 |---|---|
