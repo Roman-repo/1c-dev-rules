@@ -1,8 +1,8 @@
 # 1c-dev-rules
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE)
-[![Version: 0.2.1](https://img.shields.io/badge/version-0.2.1-blue.svg)](./docs/CHANGELOG.md)
-[![Skills: 21](https://img.shields.io/badge/skills-21-green.svg)](#что-внутри)
+[![Version: 0.3.0](https://img.shields.io/badge/version-0.3.0-blue.svg)](./docs/CHANGELOG.md)
+[![Skills: 22](https://img.shields.io/badge/skills-22-green.svg)](#что-внутри)
 [![Platform: ZCode](https://img.shields.io/badge/platform-ZCode-purple.svg)](#как-подключить)
 [![1С:Предприятие 8](https://img.shields.io/badge/1С-Предприятие%208-red.svg)](https://v8.1c.ru)
 
@@ -46,7 +46,7 @@
 
 ## Что внутри
 
-**21 скил** + 28 карточек-ссылок + 15 справочников стандартов v8std покрывают весь цикл разработки 1С:
+**22 скила** + 29 карточек-ссылок + 15 справочников стандартов v8std покрывают весь цикл разработки 1С:
 
 ### 🧭 Маршрутизация и процесс
 
@@ -69,6 +69,7 @@
 | `1c-events-transactions` | Проведение, блокировки, транзакции (№783, №460, №661) |
 | `1c-logging` | Журналирование, исключения (№499, №790) |
 | `1c-async` | `Асинх`/`Ждать` (8.3.18+), запрет модальности (№703) |
+| `1c-testing` | 🧪 Тесты: unit на YaXUnit, BDD на Vanessa Automation, цели покрытия |
 
 ### 🗄️ Данные, права, инфраструктура
 
@@ -127,7 +128,7 @@
 
 1. В ZCode: **Settings → Plugin Management → Discover → `+`**
 2. Вставьте URL: `https://github.com/Roman-repo/1c-dev-rules`
-3. **Install** — плагин включён по умолчанию, все 21 скил сразу появятся в system-reminder
+3. **Install** — плагин включён по умолчанию, все 22 скила сразу появятся в system-reminder
 
 ### Вариант 2 — как marketplace (удобно для команды)
 
@@ -172,7 +173,7 @@ git clone https://github.com/Roman-repo/1c-dev-rules ~/Projects/1c-dev-rules
 ```
 1c-dev-rules/
 ├── .zcode-plugin/plugin.json   ← манифест плагина ZCode
-├── skills/                     ← 21 скил (каждый = каталог)
+├── skills/                     ← 22 скила (каждый = каталог)
 │   └── <name>/
 │       ├── SKILL.md            ← frontmatter + мини-сводка (≤500 строк)
 │       └── references/*.md     ← полные карточки, progressive disclosure
@@ -245,11 +246,11 @@ license: MIT
 
 ## Статус и roadmap
 
-**Текущий: ✅ v0.2.1** — 21 скил + 28 references + 15 std + автоварификатор (validate_skills.py) + CI + тесты. Карточки обезличены, без привязки к конкретным конфигурациям. `1c-code-review` усилен рубрикатором high-risk patterns.
+**Текущий: ✅ v0.3.0** — 22 скила + 29 references + 15 std + автоварификатор (validate_skills.py) + CI + тесты. Карточки обезличены, без привязки к конкретным конфигурациям. Добавлен `1c-testing`, `1c-extensions` усилен граблями ролей 8.3.27.
 
 | Статус | Что |
 |---|---|
-| ✅ Готово | Каркас плагина, 21 скил, публикация на GitHub |
+| ✅ Готово | Каркас плагина, 22 скила, публикация на GitHub |
 | 🧪 Тестируется | Совместимость с Claude Code / Codex / Cursor |
 | 📋 Планируется (v0.2) | Тестирование на реальных проектах; миграция исходного проекта-донора; проверка триггеров в Claude Code |
 | 💡 Идеи (v0.3+) | Локализация карточек на английский; скрипты автопроверки структуры; интеграция с BSL Language Server |
