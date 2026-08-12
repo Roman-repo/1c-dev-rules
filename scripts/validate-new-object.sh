@@ -71,6 +71,11 @@ OBJ_MODULE=""
 [[ -f "$OBJ_PATH/ObjectModule.bsl" ]] && OBJ_MODULE="$OBJ_PATH/ObjectModule.bsl"
 MGR_MODULE=""
 [[ -f "$OBJ_PATH/ManagerModule.bsl" ]] && MGR_MODULE="$OBJ_PATH/ManagerModule.bsl"
+# CommonModule держит код в корневом Module.bsl (НЕ ObjectModule/ManagerModule).
+# Без этого X5 (параметры запроса &X ↔ УстановитьПараметр) не проверял бы общие
+# модули — а в них живут запросы регламентных заданий (G1 3-го полевого теста).
+CM_MODULE=""
+[[ -f "$OBJ_PATH/Module.bsl" ]] && CM_MODULE="$OBJ_PATH/Module.bsl"
 
 # src — на 2 уровня выше (.../src/Catalogs/Объект → .../src)
 SRC_ROOT=$(cd "$OBJ_PATH/../.." && pwd)
@@ -85,7 +90,19 @@ case "$OBJ_TYPE_DIR" in
     AccumulationRegisters)      OBJ_TYPE_SG="AccumulationRegister" ;;
     Constants)                  OBJ_TYPE_SG="Constant" ;;
     ChartsOfCharacteristicTypes) OBJ_TYPE_SG="ChartOfCharacteristicTypes" ;;
+    CommonModules)              OBJ_TYPE_SG="CommonModule" ;;
+    ScheduledJobs)              OBJ_TYPE_SG="ScheduledJob" ;;
     *)                          OBJ_TYPE_SG="" ;;
+esac
+
+# У каких типов есть ОБЪЕКТНЫЕ права (№532). CommonModule и ScheduledJob объектных
+# прав НЕ имеют (метод/РЗ вызывается платформой, роли на них не ставятся) — для них
+# №532 неприменим. Без этого флага X7 давал бы ложный FAIL на каждый новый модуль/РЗ
+# (G1 3-го полевого теста: ScheduledJobs/CommonModules вообще не распознавались).
+case "$OBJ_TYPE_SG" in
+    Catalog|Document|DataProcessor|InformationRegister|AccumulationRegister|Constant|ChartOfCharacteristicTypes)
+        HAS_RIGHTS=1 ;;
+    *)  HAS_RIGHTS=0 ;;
 esac
 
 # ─── счётчики и хелперы ───────────────────────────────────────────────
@@ -256,6 +273,7 @@ X5_FILES=()
 for m in "${FORM_MODULES[@]:-}"; do [[ -n "$m" ]] && X5_FILES+=("$m"); done
 [[ -n "$OBJ_MODULE" ]] && X5_FILES+=("$OBJ_MODULE")
 [[ -n "$MGR_MODULE" ]] && X5_FILES+=("$MGR_MODULE")
+[[ -n "$CM_MODULE" ]]  && X5_FILES+=("$CM_MODULE")
 
 if [[ ${#X5_FILES[@]} -gt 0 ]]; then
     qparams=$(grep -hoE '&[А-Яа-яЁё_]+' "${X5_FILES[@]}" 2>/dev/null \
@@ -292,8 +310,9 @@ if [[ -n "$OBJ_TYPE_SG" ]]; then
     fi
 fi
 
-# §7 X7 (№532): роли
-if [[ -n "$OBJ_TYPE_SG" ]]; then
+# §7 X7 (№532): роли. Применимо ТОЛЬКО к типам с объектными правами — CommonModule
+# и ScheduledJob прав не имеют (метод/РЗ вызывает платформа).
+if [[ "$HAS_RIGHTS" -eq 1 ]]; then
     roles_found=$(grep -rln "$OBJ_TYPE_SG\.$OBJ_NAME" "$SRC_ROOT/Roles/" 2>/dev/null | head -1)
     if [[ -n "$roles_found" ]]; then
         ok "X7 (№532): объект найден в роли: $(basename "$(dirname "$roles_found")")"
@@ -307,6 +326,49 @@ if [[ -n "$OBJ_TYPE_SG" ]]; then
         ok "X7: объект включён в подсистему: $(basename "$(dirname "$subs_found")")"
     else
         warn "X7: объект не включён ни в одну подсистему (может быть не виден в интерфейсе)"
+    fi
+elif [[ -n "$OBJ_TYPE_SG" ]]; then
+    info "X7 (№532): пропущено для '$OBJ_TYPE_SG' — нет объектных прав"
+fi
+
+# §7 X8 (ScheduledJob): <methodName>CommonModule.Имя.Метод</methodName> ↔ реальный
+# Экспорт-метод в Module.bsl общего модуля. Опечатка/отсутствие метода → РЗ молча
+# не запускается. Прямой аналог X1 (реквизиты↔формы), но для обработчика РЗ.
+# (G1 3-го полевого теста: раньше ScheduledJob не распознавался, methodName не проверялся.)
+if [[ "$OBJ_TYPE_SG" == "ScheduledJob" ]] && [[ -n "$MDO" ]]; then
+    mn=$(grep -oE '<methodName>[^<]+</methodName>' "$MDO" | sed -E 's/<\/?methodName>//g' | head -1)
+    if [[ -z "$mn" ]]; then
+        fail "X8: нет <methodName> в .mdo — РЗ без обработчика не запустится"
+    else
+        # sed -E (ERE): переносимо между GNU и BSD/macOS (BRE '\?'/'\+' на mac не работают).
+        mod_name=$(echo "$mn"   | sed -nE 's/^CommonModule\.([^.]+)\..*$/\1/p')
+        meth_name=$(echo "$mn" | sed -nE 's/^CommonModule\.[^.]+\.(.*)$/\1/p')
+        mod_bsl="$SRC_ROOT/CommonModules/$mod_name/Module.bsl"
+        if [[ -z "$mod_name" ]] || [[ -z "$meth_name" ]]; then
+            warn "X8: methodName '$mn' не вида 'CommonModule.Имя.Метод' — сверьте вручную"
+        elif [[ ! -f "$mod_bsl" ]]; then
+            fail "X8: '$mn' → общий модуль CommonModules/$mod_name/Module.bsl не найден"
+        elif ! grep -qE "(Процедура|Функция)[[:space:]]+$meth_name[[:space:]]*\(" "$mod_bsl"; then
+            fail "X8: метод '$meth_name' не определён в $mod_bsl (methodName '$mn' битый)"
+        elif ! grep -qE "(Процедура|Функция)[[:space:]]+$meth_name[[:space:]]*\([^)]*\)[[:space:]]*Экспорт" "$mod_bsl"; then
+            warn "X8: метод '$meth_name' найден, но без 'Экспорт' — РЗ его не вызовет"
+        else
+            ok "X8: methodName '$mn' → метод '$meth_name' существует и Экспорт"
+        fi
+    fi
+fi
+
+# §7 X9 (ScheduledJob): расписание. При predefined=true рядом с .mdo должен лежать
+# Schedule.schedule; иначе у РЗ нет расписания по умолчанию (№539/№402).
+if [[ "$OBJ_TYPE_SG" == "ScheduledJob" ]] && [[ -n "$MDO" ]]; then
+    if grep -q '<predefined>true</predefined>' "$MDO"; then
+        if [[ -f "$OBJ_PATH/Schedule.schedule" ]]; then
+            ok "X9: Schedule.schedule присутствует (predefined=true)"
+        else
+            warn "X9: predefined=true, но Schedule.schedule не найден рядом с .mdo"
+        fi
+    else
+        info "X9: predefined не задан — расписание настраивается интерактивно"
     fi
 fi
 
