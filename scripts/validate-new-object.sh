@@ -18,6 +18,16 @@
 
 set -u
 
+# ─── хелпер: безопасный счётчик grep -c ( НЕ использовать «|| echo 0» —   ───
+#     при 0 совпадений grep -c уже печатает «0», но exit=1, и «|| echo 0»
+#     добавляет второй «0» → «0\n0» → syntax error в [[ ]] → ложный PASS).
+gc() { # gc PATTERN FILE → число совпадений (0 если файл пуст/нет)
+    local c
+    c=$(grep -c -- "$1" "$2" 2>/dev/null) || true
+    c=${c//[^0-9]/}
+    echo "${c:-0}"
+}
+
 # ─── разбор аргументов ────────────────────────────────────────────────
 
 OBJ_PATH="${1:-}"
@@ -38,12 +48,29 @@ OBJ_NAME=$(basename "$OBJ_PATH")
 # ─── найти файлы объекта ──────────────────────────────────────────────
 
 MDO=$(find "$OBJ_PATH" -maxdepth 1 -name "*.mdo" -type f 2>/dev/null | head -1)
-FORM=""
-MODULE=""
+
+# F3: собираем ВСЕ Form.form объекта (раньше был «find | head -1» — брал
+# недетерминированно одну форму, часто не главную). Сортируем для стабильности.
+FORMS=()
 if [[ -d "$OBJ_PATH/Forms" ]]; then
-    FORM=$(find "$OBJ_PATH/Forms" -name "Form.form" -type f 2>/dev/null | head -1)
-    MODULE=$(find "$OBJ_PATH/Forms" -name "Module.bsl" -type f 2>/dev/null | head -1)
+    while IFS= read -r f; do
+        [[ -n "$f" ]] && FORMS+=("$f")
+    done < <(find "$OBJ_PATH/Forms" -name "Form.form" -type f 2>/dev/null | sort)
 fi
+
+# Модули форм (для X5 — параметры запроса в обработчиках)
+FORM_MODULES=()
+for f in "${FORMS[@]:-}"; do
+    m="${f%Form.form}Module.bsl"
+    [[ -f "$m" ]] && FORM_MODULES+=("$m")
+done
+
+# F7: модуль объекта и модуль менеджера — в них живут запросы проведения,
+# а не только в модулях форм. X5 теперь проверяет и их.
+OBJ_MODULE=""
+[[ -f "$OBJ_PATH/ObjectModule.bsl" ]] && OBJ_MODULE="$OBJ_PATH/ObjectModule.bsl"
+MGR_MODULE=""
+[[ -f "$OBJ_PATH/ManagerModule.bsl" ]] && MGR_MODULE="$OBJ_PATH/ManagerModule.bsl"
 
 # src — на 2 уровня выше (.../src/Catalogs/Объект → .../src)
 SRC_ROOT=$(cd "$OBJ_PATH/../.." && pwd)
@@ -79,8 +106,9 @@ echo " Путь:    $OBJ_PATH"
 echo " src:     $SRC_ROOT"
 echo " Тип:     ${OBJ_TYPE_SG:-<неизвестен — каталог '$OBJ_TYPE_DIR' не распознан>}"
 [[ -n "$MDO"    ]] && echo " .mdo:      $MDO"
-[[ -n "$FORM"   ]] && echo " Form.form: $FORM"
-[[ -n "$MODULE" ]] && echo " Module:    $MODULE"
+for f in "${FORMS[@]:-}"; do [[ -n "$f" ]] && echo " Form.form: $f"; done
+[[ -n "$OBJ_MODULE" ]] && echo " ObjectModule: $OBJ_MODULE"
+[[ -n "$MGR_MODULE" ]] && echo " ManagerModule: $MGR_MODULE"
 echo "════════════════════════════════════════════════════════════════════"
 echo
 
@@ -119,35 +147,60 @@ else
         fi
     done < <(grep -oE '(uuid|typeId|valueTypeId)="[0-9a-f-]+"' "$MDO" | sed 's/.*="//;s/"$//' | sort -u)
     [[ "$proj_conflicts" -eq 0 ]] && ok "правило 12: все UUID уникальны по проекту"
+
+    # F8/§6 M12: специфика accumulation-регистров
+    if [[ "$OBJ_TYPE_SG" == "AccumulationRegister" ]]; then
+        res_cnt=$(gc '<resources uuid=' "$MDO")
+        dim_cnt=$(gc '<dimensions uuid=' "$MDO")
+        if [[ "$res_cnt" -ge 1 ]]; then
+            ok "M12: есть ресурсы ($res_cnt)"
+        else
+            fail "M12: нет ресурсов (<resources>) — регистр без ресурса некорректен"
+        fi
+        if [[ "$dim_cnt" -ge 1 ]]; then
+            ok "M12: есть измерения ($dim_cnt)"
+        else
+            fail "M12: нет измерений (<dimensions>) — регистр без измерения некорректен"
+        fi
+        if grep -q '<registerType>Turnovers</registerType>' "$MDO"; then
+            warn "M12: регистр Turnovers — контролировать остатки через .Остатки() НЕЛЬЗЯ (нужен Balance/BalanceAndTurnovers). См. registers-design §1"
+        elif grep -q '<name>RecordType</name>' "$MDO"; then
+            ok "M12: баланс-регистр (есть RecordType) — .Остатки() доступна"
+        else
+            info "M12: тип регистра не указан явно / нет RecordType — сверьте с эталоном (EDT: Balance по умолчанию)"
+        fi
+    fi
 fi
 
-if [[ -n "$FORM" ]]; then
+# §6 F3/F4: проверки КАЖДОЙ формы (раньше — одной, недетерминированной)
+for FORM in "${FORMS[@]:-}"; do
+    [[ -z "$FORM" ]] && continue
+    fname=$(basename "$(dirname "$FORM")")
+
     # §6 F3: companion-элементы. InputField+CheckBoxField → contextMenu + extendedTooltip
-    # NB: в EDT-формате тип поля — это <type>InputField</type> (внутри <items xsi:type="form:FormField">),
-    # НЕ xsi:type="form:InputField". grep -c всегда печатает число (даже 0).
-    in_cnt=$(grep -c '<type>InputField</type>' "$FORM" 2>/dev/null);  in_cnt=${in_cnt:-0}
-    cb_cnt=$(grep -c '<type>CheckBoxField</type>' "$FORM" 2>/dev/null); cb_cnt=${cb_cnt:-0}
-    cm_cnt=$(grep -c '<contextMenu>' "$FORM" 2>/dev/null);             cm_cnt=${cm_cnt:-0}
-    et_cnt=$(grep -c '<extendedTooltip>' "$FORM" 2>/dev/null);         et_cnt=${et_cnt:-0}
+    in_cnt=$(gc '<type>InputField</type>' "$FORM")
+    cb_cnt=$(gc '<type>CheckBoxField</type>' "$FORM")
+    cm_cnt=$(gc '<contextMenu>' "$FORM")
+    et_cnt=$(gc '<extendedTooltip>' "$FORM")
     expected_cm=$((in_cnt + cb_cnt))
     if [[ $expected_cm -eq 0 ]] || [[ $cm_cnt -ge $expected_cm ]]; then
-        ok "F3: contextMenu ($cm_cnt) покрывает поля ($expected_cm)"
+        ok "F3 [$fname]: contextMenu ($cm_cnt) покрывает поля ($expected_cm)"
     else
-        fail "F3: contextMenu ($cm_cnt) < InputField+CheckBoxField ($expected_cm) — не у каждого поля contextMenu"
+        fail "F3 [$fname]: contextMenu ($cm_cnt) < InputField+CheckBoxField ($expected_cm) — не у каждого поля contextMenu"
     fi
     if [[ $et_cnt -ge $expected_cm ]]; then
-        ok "F3: extendedTooltip ($et_cnt) покрывает поля ($expected_cm)"
+        ok "F3 [$fname]: extendedTooltip ($et_cnt) покрывает поля ($expected_cm)"
     else
-        warn "F3: extendedTooltip ($et_cnt) < полей ($expected_cm) — EDT пересоздаст при открытии"
+        warn "F3 [$fname]: extendedTooltip ($et_cnt) < полей ($expected_cm) — EDT пересоздаст при открытии"
     fi
 
     # §6 F4: DataPath сегменты (для ручной сверки с <attributes>)
     segs=$(grep -oE '<segments>[^<]+</segments>' "$FORM" 2>/dev/null)
     if [[ -n "$segs" ]]; then
-        info "F4: DataPath сегменты — сверьте корневой сегмент с <attributes>:"
+        info "F4 [$fname]: DataPath — сверьте корневой сегмент с <attributes>:"
         echo "$segs" | sed 's/^/      /'
     fi
-fi
+done
 
 echo
 
@@ -160,46 +213,63 @@ echo "─── §7. Кросс-файловая согласованность 
 if [[ -z "$MDO" ]]; then
     fail "§7 пропущен: нет .mdo"
 else
-    # §7 X1: реквизиты из .mdo должны быть в Form.form и/или Module.bsl
-    # Извлекаем имена из блоков <attributes uuid="..."><name>X</name>
+    # §7 X1: реквизиты из .mdo должны быть в ХОТЯ БЫ ОДНОЙ форме.
+    # Учитываем пути и шапки, и ТЧ: «Объект.Атр» / «Объект.ТЧ.Атр» (segments
+    # оканчиваются на «.Атр») и колонки таблицы «<name>…Атр</name>».
+    # F2: баг «grep -c … || echo 0» исправлен — используем хелпер gc().
     req_count=0
-    req_missing_form=0
+    req_missing=0
     while IFS= read -r req; do
         [[ -z "$req" ]] && continue
         req_count=$((req_count+1))
-        if [[ -n "$FORM" ]]; then
-            fc=$(grep -c "Объект\.$req\|<name>$req</name>" "$FORM" 2>/dev/null || echo 0)
-            if [[ "$fc" -eq 0 ]]; then
-                warn "X1: реквизит '$req' из .mdo не найден в Form.form"
-                req_missing_form=$((req_missing_form+1))
+        if [[ ${#FORMS[@]} -gt 0 ]]; then
+            found=0
+            for FORM in "${FORMS[@]}"; do
+                # segments оканчиваются на «.<req>» или совпадают «Объект.<req>»
+                if grep -qE "<segments>[^<]*\.$req</segments>|<segments>Объект\.$req</segments>" "$FORM" 2>/dev/null \
+                   || grep -qE "<name>[^<]*$req</name>" "$FORM" 2>/dev/null; then
+                    found=1
+                    break
+                fi
+            done
+            if [[ "$found" -eq 0 ]]; then
+                warn "X1: реквизит '$req' из .mdo не найден ни в одной форме"
+                req_missing=$((req_missing+1))
             fi
         fi
     done < <(awk '/<attributes uuid=/{getline; gsub(/<\/?name>/,""); gsub(/^[ \t]+/,""); print}' "$MDO")
 
-    if [[ $req_count -gt 0 ]] && [[ $req_missing_form -eq 0 ]] && [[ -n "$FORM" ]]; then
-        ok "X1: все $req_count реквизитов из .mdo присутствуют в Form.form"
-    elif [[ $req_count -gt 0 ]] && [[ -n "$FORM" ]]; then
-        info "X1: проверено $req_count реквизитов; $req_missing_form не найдены в Form.form"
+    if [[ $req_count -gt 0 ]] && [[ ${#FORMS[@]} -gt 0 ]]; then
+        if [[ $req_missing -eq 0 ]]; then
+            ok "X1: все $req_count реквизитов из .mdo присутствуют в формах"
+        else
+            info "X1: проверено $req_count реквизитов; $req_missing не найдены в формах"
+        fi
     fi
 fi
 
-# §7 X5: параметры запроса — &X в тексте ↔ УстановитьПараметр("X", ...)
-# ВНИМАНИЕ: &НаКлиенте/&НаСервере и пр. — это директивы метода, НЕ параметры запроса.
-# Их надо исключить, иначе будет ложное срабатывание.
-if [[ -n "$MODULE" ]]; then
-    DIRECTIVES_RE='^(НаКлиенте|НаСервере|НаСервереБезКонтекста|НаКлиентеНаСервере|НаКлиентеНаСервереБезКонтекста|НаКлиентеНаСервереБезВозвратаНаКлиента|На Corporate|На интеграционном сервере)$'
-    qparams=$(grep -oE '&[А-Яа-яЁё_]+' "$MODULE" 2>/dev/null \
+# §7 X5: параметры запроса — &X в тексте ↔ УстановитьПараметр("X", ...).
+# F7: сканируем НЕ только модули форм, но и ObjectModule.bsl / ManagerModule.bsl —
+# именно там живут запросы проведения (Остатки/СрезПоследних в ОбработкаПроведения).
+DIRECTIVES_RE='^(НаКлиенте|НаСервере|НаСервереБезКонтекста|НаКлиентеНаСервере|НаКлиентеНаСервереБезКонтекста|НаКлиентеНаСервереБезВозвратаНаКлиента|НаКлиентеНаСервереБезКонтекстаВозвратНаКлиента)$'
+X5_FILES=()
+for m in "${FORM_MODULES[@]:-}"; do [[ -n "$m" ]] && X5_FILES+=("$m"); done
+[[ -n "$OBJ_MODULE" ]] && X5_FILES+=("$OBJ_MODULE")
+[[ -n "$MGR_MODULE" ]] && X5_FILES+=("$MGR_MODULE")
+
+if [[ ${#X5_FILES[@]} -gt 0 ]]; then
+    qparams=$(grep -hoE '&[А-Яа-яЁё_]+' "${X5_FILES[@]}" 2>/dev/null \
         | sed 's/^&//' \
         | grep -vE "$DIRECTIVES_RE" \
         | sort -u)
-    setparams=$(grep -oE 'УстановитьПараметр\("[^"]+"' "$MODULE" 2>/dev/null | sed 's/УстановитьПараметр("//;s/"$//' | sort -u)
+    setparams=$(grep -hoE 'УстановитьПараметр\("[^"]+"' "${X5_FILES[@]}" 2>/dev/null \
+        | sed 's/УстановитьПараметр("//;s/"$//' | sort -u)
     if [[ -n "$qparams" ]] || [[ -n "$setparams" ]]; then
-        # симметричная разность: то что в одном, но не в другом
         only_in_text=$(comm -23 <(echo "$qparams") <(echo "$setparams") 2>/dev/null)
         only_in_call=$(comm -13 <(echo "$qparams") <(echo "$setparams") 2>/dev/null)
         if [[ -z "$only_in_text" ]] && [[ -z "$only_in_call" ]]; then
             cnt=$(echo "$qparams" | grep -c .)
-            ok "X5: параметры запроса (&) и УстановитьПараметр согласованы ($cnt шт.)"
+            ok "X5: параметры запроса (&) и УстановитьПараметр согласованы ($cnt шт., файлы: ${X5_FILES[*]##*/})"
         else
             fail "X5: рассогласование параметров запроса"
             [[ -n "$only_in_text" ]] && echo "      есть в &X, нет в УстановитьПараметр:" $only_in_text

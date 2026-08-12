@@ -9,21 +9,20 @@
 
 ---
 
-## 🔴 1. `LineNumber` в табличных частях — НЕ добавлять
+## 🟡 1. `LineNumber` в табличных частях — зависит от формата (EDT vs Конфигуратор)
 
-Табличные части **не должны** содержать `<standardAttributes>` с `LineNumber`. Платформа добавляет его автоматически; явная копия вызывает ошибку загрузки или дублирование.
+> Уточнено после инцидента в полевом тесте: первоначальная формулировка «явная копия
+> вызывает ошибку загрузки» оказалась **категоричной для EDT** — реальные EDT-конфигурации
+> (включая БСП-проекты) содержат явный `<standardAttributes><name>LineNumber</name>` в
+> `.mdo` и **грузятся без ошибок**. Правило различается по формату исходников.
 
-```xml
-<!-- НЕПРАВИЛЬНО — удалить этот блок из <tabularSections> -->
-<standardAttributes>
-  <dataHistory>Use</dataHistory>
-  <name>LineNumber</name>
-  <fillValue xsi:type="core:UndefinedValue"/>
-  <fullTextSearch>Use</fullTextSearch>
-</standardAttributes>
-```
+| Формат | `LineNumber` в табчасти | Действие |
+|---|---|---|
+| **Конфигуратор** (дизайнерский XML `.xcf`) | **Не добавлять** в `ChildItems` | Платформа создаёт сама → явная копия = дублирование |
+| **EDT** (`.mdo`) | `<standardAttributes><name>LineNumber</name>` в `<tabularSections>` | **Допустим**, часто присутствует в реальных файлах; не обязателен, но и не ошибочен — вручную не удалять |
 
-То же для `.mdo` (EDT) — не добавляйте `LineNumber` как `standardAttribute` к табличным частям.
+Практический вывод: при ручной правке EDT-`.mdo` — **зеркалируйте образец** (если в эталоне
+`LineNumber` есть — оставляйте; нет — не добавляйте). Критичной ошибкой это не является.
 
 📖 Стандарт: [№649](https://github.com/zeegin/v8std/blob/main/docs/std/649.md) Реквизиты
 
@@ -116,7 +115,7 @@
 | M5 | **ChildObjects — допустимые типы** | Внутри `Catalog` — только `attributes`, `tabularSections`, `forms`, `templates`, `commands`. Внутри `Document` — аналогично + `documentRegisterRecords` (БСП). Чужой тег → ошибка | Недопустимый тег → LoadConfigFromFiles падает |
 | M6 | **Реквизиты: UUID, имя, тип** | Каждый `attributes` имеет `uuid`, `name`, и `<type>` с `types` внутри. Составной тип — по №728 | Нет типа → ошибка; невалидный UUID → конфликт |
 | M7 | **Уникальность имён** | Имена `attributes`/табличных частей/форм уникальны в пределах объекта | Дубликат → ошибка загрузки |
-| M8 | **TabularSections — корректная структура** | `tabularSections` содержит `attributes` с UUID/имя/тип. **Не** содержит `LineNumber` в `standardAttributes` (платформа добавляет сама) | Явный `LineNumber` → дублирование, ошибка |
+| M8 | **TabularSections — корректная структура** | `tabularSections` содержит `attributes` с UUID/имя/тип. `LineNumber` в EDT-`.mdo` допустим (см. §1), в Конфигураторе — не добавлять | Нарушение структуры `attributes` → ошибка загрузки |
 | M9 | **Согласованность свойств** | `AccountingRegister` имеет `chartOfAccounts`; `CalculationRegister` — `chartOfCalculationTypes`; `EventSubscription` — `handler` (формат `CommonModule.Имя.Процедура`); `ScheduledJob` — `methodName` | Пустое обязательное поле → ошибка при загрузке |
 | M10 | **Command — Group обязателен** | Каждая `commands` имеет `_group` (или корректную ссылку на `CommandGroup.Имя`). Тип параметра секционной группы несовместим с `CommandParameterType` | Команда без группы → 1С отвергает при загрузке |
 | M11 | **Роли на новый объект (№532)** | Объект присутствует хотя бы в одном `<путь к src>/Roles/*/Rights.rights`: `grep -rl "Constant.Имя\|InformationRegister.Имя\|Catalog.Имя" <путь к src>/Roles/`. Для регистра/справочника — права и на измерения/реквизиты (`Dimension.Имя`, `Attribute.Имя`) | Нет ролей → объект невидим стандартным пользователям |
