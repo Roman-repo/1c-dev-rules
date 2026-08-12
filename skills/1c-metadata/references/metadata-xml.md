@@ -145,6 +145,51 @@ grep -oE '<segments>[^<]+</segments>' Forms/Форма/Form.form
 
 ---
 
+## 7. Кросс-файловая согласованность (критично для hand-edited metadata)
+
+> §6 выше проверяет **каждый файл отдельно**. Но при ручной правке метаданных без EDT объект размазан по нескольким файлам, и **самые коварные баги — расхождения между ними**: имя реквизита в `.mdo` не совпадает с `dataPath` в `Form.form` или с `Объект.X` в `Module.bsl`. Эти баги не ловит ни EDT-импорт (форма падает в рантайме, а не на загрузке), ни проверки §6.
+
+### 7.1. Цепочки, которые надо сверять
+
+| # | Цепочка | Где проверять |
+|---|---|---|
+| **X1** | Реквизит объекта: `.mdo` `<attributes><name>X</name>` ↔ `Form.form` `<segments>Объект.X</segments>` ↔ `Module.bsl` `Объект.X` | все 3 файла |
+| **X2** | Реквизит формы (без `Объект.`): `Form.form` `<attributes><name>X</name>` ↔ `<segments>X</segments>` | Form.form (внутри) |
+| **X3** | Команда: `Form.form` `<formCommands><name>X</name>` + `<handler><name>X</name>` ↔ кнопка `<commandName>Form.Command.X</commandName>` ↔ `Module.bsl` `Процедура X(Команда)` | Form.form + Module.bsl |
+| **X4** | Обработчик события формы: `Form.form` `<handlers><name>ПриСозданииНаСервере</name>` ↔ `Module.bsl` `&НаСервере Процедура ПриСозданииНаСервере` | Form.form + Module.bsl |
+| **X5** | Параметр запроса: `&X` в тексте запроса ↔ `Запрос.УстановитьПараметр("X", ...)` | Module.bsl (внутри) |
+| **X6** | Новый объект присутствует в `Configuration.mdo` (`<catalogs>`/`<dataProcessors>`/`<documents>`/…) | Configuration.mdo |
+| **X7** | Роли на новый объект (№532, M11) + объект в подсистеме | Roles/ + Subsystems/ |
+
+### 7.2. Автоматическая проверка
+
+Прогоните скрипт `scripts/validate-new-object.sh` (из корня репозитория плагина):
+
+```bash
+bash scripts/validate-new-object.sh /path/to/src/Catalogs/ВашОбъект
+```
+
+Скрипт проходит проверки §6 (UUID/ID/DataPath/companions) + §7 (X1–X7) и печатает отчёт PASS/FAIL. Не заменяет EDT-валидацию, но ловит 80% типовых багов ручной правки.
+
+### 7.3. Ручные grep-проверки
+
+```bash
+# X1: имя реквизита должно встречаться во всех 3 файлах
+ИМЯ="ВашРеквизит"
+echo "mdo:      $(grep -c "<name>$ИМЯ</name>" Объект.mdo)"
+echo "Form.form: $(grep -c "Объект.$ИМЯ" Forms/Форма/Form.form)"
+echo "Module:   $(grep -c "Объект.$ИМЯ" Forms/Форма/Module.bsl)"
+
+# X5: имена параметров запроса (текст ↔ вызов УстановитьПараметр) должны совпадать
+grep -oE '&[А-Яа-яЁё_]+' Forms/Форма/Module.bsl | sort -u
+grep -oE 'УстановитьПараметр\("[^"]+"' Forms/Форма/Module.bsl | sort -u
+
+# X6: объект зарегистрирован в Configuration.mdo
+grep -rln "Catalog.Имя\|DataProcessor.Имя" Configuration/
+```
+
+---
+
 ## Чек-лист перед коммитом правок XML
 
 - [ ] В табличных частях нет `LineNumber` в `standardAttributes`
@@ -154,6 +199,8 @@ grep -oE '<segments>[^<]+</segments>' Forms/Форма/Form.form
 - [ ] `Configuration.xml` / `Configuration.mdo` обновлён (`childObjects`)
 - [ ] Форма/объект открывается в EDT после правки
 - [ ] **Прогнаны проверки из §6** (ID/DataPath/companions для формы; UUID/типы/синонимы для объекта)
+- [ ] **Кросс-файловая согласованность (§7):** имена реквизитов/команд/обработчиков/параметров согласованы между `.mdo`, `Form.form`, `Module.bsl`
+- [ ] **Прогнан `scripts/validate-new-object.sh`** — все критичные проверки PASS
 
 ## Связанные карточки
 
