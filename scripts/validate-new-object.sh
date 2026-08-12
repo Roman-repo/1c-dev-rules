@@ -92,6 +92,8 @@ case "$OBJ_TYPE_DIR" in
     ChartsOfCharacteristicTypes) OBJ_TYPE_SG="ChartOfCharacteristicTypes" ;;
     CommonModules)              OBJ_TYPE_SG="CommonModule" ;;
     ScheduledJobs)              OBJ_TYPE_SG="ScheduledJob" ;;
+    HTTPServices)               OBJ_TYPE_SG="HTTPService" ;;
+    WebServices)                OBJ_TYPE_SG="WebService" ;;
     *)                          OBJ_TYPE_SG="" ;;
 esac
 
@@ -99,8 +101,10 @@ esac
 # прав НЕ имеют (метод/РЗ вызывается платформой, роли на них не ставятся) — для них
 # №532 неприменим. Без этого флага X7 давал бы ложный FAIL на каждый новый модуль/РЗ
 # (G1 3-го полевого теста: ScheduledJobs/CommonModules вообще не распознавались).
+# HTTPService/WebService имеют право Use (не Read/Update) — но проверку «объект в роли»
+# (X7) для них тоже надо гонять, поэтому они в HAS_RIGHTS (G4 3-го полевого теста).
 case "$OBJ_TYPE_SG" in
-    Catalog|Document|DataProcessor|InformationRegister|AccumulationRegister|Constant|ChartOfCharacteristicTypes)
+    Catalog|Document|DataProcessor|InformationRegister|AccumulationRegister|Constant|ChartOfCharacteristicTypes|HTTPService|WebService)
         HAS_RIGHTS=1 ;;
     *)  HAS_RIGHTS=0 ;;
 esac
@@ -153,17 +157,58 @@ else
         fail "M4: нет синонима ru"
     fi
 
-    # правило 12 AGENTS.md: все UUID уникальны по проекту
-    proj_conflicts=0
-    while IFS= read -r uuid; do
-        [[ -z "$uuid" ]] && continue
-        c=$(grep -rln "$uuid" "$SRC_ROOT" 2>/dev/null | wc -l | tr -d ' ')
-        if [[ "$c" -gt 1 ]]; then
-            fail "правило 12: UUID $uuid найден в $c файлах проекта (ожидается 1)"
-            proj_conflicts=$((proj_conflicts+1))
-        fi
-    done < <(grep -oE '(uuid|typeId|valueTypeId)="[0-9a-f-]+"' "$MDO" | sed 's/.*="//;s/"$//' | sort -u)
-    [[ "$proj_conflicts" -eq 0 ]] && ok "правило 12: все UUID уникальны по проекту"
+    # правило 12 AGENTS.md: все UUID уникальны по проекту.
+    # G6 (3-й полевой тест): Python-проход вместо N × grep. BSD grep с -f и многими
+    # паттернами минутами виснет на крупных объектах (WebServices/Exchange, 81 UUID →
+    # 5:54 на grep -rlF -f; Python os.walk по .mdo/.form/.rights — 2.6с, ~135× быстрее).
+    rule12=$(python3 - "$SRC_ROOT" "$MDO" <<'PY'
+import os, re, sys
+src, mdo = sys.argv[1], sys.argv[2]
+try:
+    with open(mdo, encoding='utf-8') as f:
+        text = f.read()
+except Exception:
+    print("ERR"); sys.exit(0)
+our = set(re.findall(r'(?:uuid|typeId|valueTypeId)="([0-9a-f-]{36})"', text))
+if not our:
+    print("OK 0"); sys.exit(0)
+exts = ('.mdo', '.form', '.rights')
+hits = {}
+for root, _, files in os.walk(src):
+    for fn in files:
+        if not fn.endswith(exts):
+            continue
+        try:
+            with open(os.path.join(root, fn), encoding='utf-8', errors='ignore') as fh:
+                t = fh.read()
+        except Exception:
+            continue
+        for u in re.findall(r'"([0-9a-f-]{36})"', t):
+            if u in our:
+                hits[u] = hits.get(u, 0) + 1
+conflicts = {u: c for u, c in hits.items() if c > 1}
+if not conflicts:
+    print("OK %d" % len(our))
+else:
+    print("CONFLICT %d" % len(conflicts))
+    for u, c in sorted(conflicts.items()):
+        print("%s %d" % (u, c))
+PY
+)
+    rule12_head=$(echo "$rule12" | head -1)
+    case "$rule12_head" in
+        OK*)
+            ok "правило 12: все UUID уникальны по проекту ($(echo "$rule12_head" | awk '{print $2}') шт.)" ;;
+        CONFLICT*)
+            while read -r u c; do
+                [[ -z "$u" ]] && continue
+                fail "правило 12: UUID $u найден в $c файлах проекта (ожидается 1)"
+            done < <(echo "$rule12" | tail -n +2) ;;
+        ERR*)
+            warn "правило 12: не удалось прочитать .mdo" ;;
+        *)
+            warn "правило 12: неожиданный ответ: $rule12_head" ;;
+    esac
 
     # F8/§6 M12: специфика accumulation-регистров
     if [[ "$OBJ_TYPE_SG" == "AccumulationRegister" ]]; then
@@ -276,7 +321,10 @@ for m in "${FORM_MODULES[@]:-}"; do [[ -n "$m" ]] && X5_FILES+=("$m"); done
 [[ -n "$CM_MODULE" ]]  && X5_FILES+=("$CM_MODULE")
 
 if [[ ${#X5_FILES[@]} -gt 0 ]]; then
-    qparams=$(grep -hoE '&[А-Яа-яЁё_]+' "${X5_FILES[@]}" 2>/dev/null \
+    # Параметры запроса могут быть и латиничными (RepairID) — иначе такой параметр
+    # НЕ попадёт в выборку &X, и скрипт выдаст ложное «рассогласование»
+    # (G5 3-го полевого теста: латиничное имя параметра). Латиничных директив нет.
+    qparams=$(grep -hoE '&[А-Яа-яA-Za-zЁё_]+' "${X5_FILES[@]}" 2>/dev/null \
         | sed 's/^&//' \
         | grep -vE "$DIRECTIVES_RE" \
         | sort -u)
