@@ -159,6 +159,11 @@ grep -oE '<segments>[^<]+</segments>' Forms/Форма/Form.form
 | **X5** | Параметр запроса: `&X` в тексте запроса ↔ `Запрос.УстановитьПараметр("X", ...)` | Module.bsl (внутри) |
 | **X6** | Новый объект присутствует в `Configuration.mdo` (`<catalogs>`/`<dataProcessors>`/`<documents>`/…) | Configuration.mdo |
 | **X7** | Роли на новый объект (№532, M11) + объект в подсистеме | Roles/ + Subsystems/ |
+| **X8** | Регламентное задание: `.mdo` `<methodName>CommonModule.Имя.Метод</methodName>` ↔ `Процедура Метод(...) Экспорт` в `Module.bsl` общего модуля. Опечатка → РЗ молча не запускается | .mdo + CommonModules/…/Module.bsl |
+| **X9** | Регламентное задание: `predefined=true` → рядом с `.mdo` лежит `Schedule.schedule` (расписание по умолчанию) | .mdo + Schedule.schedule |
+| **X11** | Расширение (CFE): каждый `&ИзменениеИКонтроль(...)` сопровождается `ПродолжитьВызов()`, иначе оригинальный метод не выполнится | Module.bsl расширения (внутри) |
+| **X12** | Подписка на событие: `.mdo` `<handler>CommonModule.Имя.Метод</handler>` ↔ `Процедура Метод(...) Экспорт` в `Module.bsl` общего модуля. Опечатка → событие уходит в несуществующий обработчик | .mdo + CommonModules/…/Module.bsl |
+| **X13** | Отчёт (Report): `.mdo` `<mainDataCompositionSchema>…Template.Имя</…>` ↔ `Templates/<Имя>/Template.dcs` существует, а шаблон объявлен в `<templates>` с `templateType=DataCompositionSchema`. Опечатка → отчёт падает при открытии | .mdo + Templates/…/Template.dcs |
 
 ### 7.2. Автоматическая проверка
 
@@ -168,9 +173,9 @@ grep -oE '<segments>[^<]+</segments>' Forms/Форма/Form.form
 bash scripts/validate-new-object.sh /path/to/src/Catalogs/ВашОбъект
 ```
 
-Скрипт проходит проверки §6 (UUID/ID/DataPath/companions) + §7 (X1–X12) и печатает отчёт PASS/FAIL. Не заменяет EDT-валидацию, но ловит 80% типовых багов ручной правки.
+Скрипт проходит проверки §6 (UUID/ID/DataPath/companions) + §7 (X1–X13) и печатает отчёт PASS/FAIL. Не заменяет EDT-валидацию, но ловит 80% типовых багов ручной правки.
 
-Поддерживаемые типы (распознаются и проверяются кросс-файлово): `Catalog`, `Document`, `DataProcessor`, `InformationRegister`, `AccumulationRegister`, `Constant`, `ChartOfCharacteristicTypes`, `CommonModule`, `ScheduledJob`, `HTTPService`, `WebService`, `EventSubscription`. Для нераспознанного типа скрипт предупреждает, что кросс-файловые проверки пропущены (не доверяйте «все проверки пройдены»).
+Поддерживаемые типы (распознаются и проверяются кросс-файлово): `Catalog`, `Document`, `DataProcessor`, `InformationRegister`, `AccumulationRegister`, `Constant`, `ChartOfCharacteristicTypes`, `CommonModule`, `ScheduledJob`, `HTTPService`, `WebService`, `EventSubscription`, `Report`. Для нераспознанного типа скрипт предупреждает, что кросс-файловые проверки пропущены (не доверяйте «все проверки пройдены»).
 
 ### 7.3. Ручные grep-проверки
 
