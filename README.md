@@ -191,7 +191,7 @@ git clone https://github.com/Roman-repo/1c-dev-rules ~/Projects/1c-dev-rules
 │       ├── SKILL.md            ← frontmatter + мини-сводка (≤500 строк)
 │       └── references/*.md     ← полные карточки, progressive disclosure
 ├── scripts/                    ← validate-new-object.sh (X1–X13), validate_skills.py, bump-version.sh
-├── std/                        ← 15 оглавлений v8std (справочный слой)
+├── std/                        ← 14 оглавлений v8std + индекс (справочный слой)
 └── docs/                       ← ARCHITECTURE, SOURCES, CHANGELOG
 ```
 
