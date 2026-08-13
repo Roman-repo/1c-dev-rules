@@ -1,6 +1,6 @@
 ---
 name: 1c-project-bootstrap
-description: Генератор AGENTS.md и .zcode/config.json для нового проекта 1С. Use when onboarding a new 1C project: спрашивает префикс, путь к src, compatibilityMode — и создаёт AGENTS.md с секциями и заглушками. Запускать один раз при подключении.
+description: Генератор AGENTS.md и .zcode/config.json для нового проекта 1С. Use when onboarding a new 1C project: спрашивает префикс, путь к src, compatibilityMode — и создаёт AGENTS.md с секциями и заглушками. Запускать один раз при подключении. Триггеры: настрой новый проект, сгенерируй AGENTS.md, подключи 1c-dev-rules, bootstrap проекта, с чего начать в новом проекте 1С.
 when_to_use: >
   При онбординге нового проекта 1С к набору правил. Триггеры: "настрой новый проект",
   "сгенерируй AGENTS.md", "подключи 1c-dev-rules", "bootstrap проекта", "с чего начать
