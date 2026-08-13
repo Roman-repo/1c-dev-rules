@@ -100,6 +100,8 @@ license: MIT
 | `НаборЗаписей.Записать()` в цикле | `1c-performance` |
 | Запрос в цикле (`Запрос.Выполнить()` в `Для`) | `1c-queries` |
 | `АвтоОбновление = Истина` у списка | `1c-performance` |
+| `access_token` / `client_secret` / секрет в коде или URL | `1c-integration` (+ `references/integration-auth.md`) |
+| `EnterpriseData` / план обмена / конвертация данных | `1c-integration` (+ `references/exchange-edm.md`) |
 
 ---
 
