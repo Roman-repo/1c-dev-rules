@@ -168,7 +168,9 @@ grep -oE '<segments>[^<]+</segments>' Forms/Форма/Form.form
 bash scripts/validate-new-object.sh /path/to/src/Catalogs/ВашОбъект
 ```
 
-Скрипт проходит проверки §6 (UUID/ID/DataPath/companions) + §7 (X1–X7) и печатает отчёт PASS/FAIL. Не заменяет EDT-валидацию, но ловит 80% типовых багов ручной правки.
+Скрипт проходит проверки §6 (UUID/ID/DataPath/companions) + §7 (X1–X12) и печатает отчёт PASS/FAIL. Не заменяет EDT-валидацию, но ловит 80% типовых багов ручной правки.
+
+Поддерживаемые типы (распознаются и проверяются кросс-файлово): `Catalog`, `Document`, `DataProcessor`, `InformationRegister`, `AccumulationRegister`, `Constant`, `ChartOfCharacteristicTypes`, `CommonModule`, `ScheduledJob`, `HTTPService`, `WebService`, `EventSubscription`. Для нераспознанного типа скрипт предупреждает, что кросс-файловые проверки пропущены (не доверяйте «все проверки пройдены»).
 
 ### 7.3. Ручные grep-проверки
 
