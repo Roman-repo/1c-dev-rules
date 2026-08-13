@@ -27,7 +27,7 @@
   - `1c-dcs-spec.md` — структура XML-схемы СКД
   - `1c-config-objects-spec.md` — стандартные реквизиты объектов метаданных
   - `1c-configuration-spec.md` — свойства `Configuration.mdo`
-- **Используется как есть** (с riferimento) в скилах `1c-metadata`, `1c-platform-support`, `1c-queries`.
+- **Используется как есть** (со ссылкой на источник) в скилах `1c-metadata`, `1c-platform-support`, `1c-queries`.
 
 ## Лицензия набора
 
