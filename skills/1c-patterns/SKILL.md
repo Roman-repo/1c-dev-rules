@@ -1,6 +1,6 @@
 ---
 name: 1c-patterns
-description: Архитектурные паттерны 1С (SOLID, GRASP, инженерные). Use when designing where logic lives — DRY (не дублируй), KISS (выбирай простое), YAGNI (не строй на будущее), Separation of Concerns (UI vs сервер), Rule of Three.
+description: Архитектурные паттерны 1С (SOLID, GRASP, инженерные). Use when designing where logic lives — DRY (не дублируй), KISS (выбирай простое), YAGNI (не строй на будущее), Separation of Concerns (UI vs сервер), Rule of Three. Триггеры: где разместить логику, не переусложнил ли, спроектируй, архитектура, разделение ответственности, переиспользование, связанность, связность.
 when_to_use: >
   На этапе архитектурного проектирования 1С — «где разместить логику», «не переусложнил ли».
   Триггеры: "спроектируй", "архитектура", "DRY", "KISS", "SOLID", "разделение

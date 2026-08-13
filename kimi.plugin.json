@@ -1,0 +1,23 @@
+{
+  "$schema": "https://catalog.deva.msh.team/schemas/kimi.plugin.schema.json",
+  "name": "1c-dev-rules",
+  "version": "0.5.8",
+  "description": "Универсальный подключаемый набор правил разработки 1С:Предприятие 8 на основе v8std. Скилы для написания и ревью кода: запросы, формы, метаданные, транзакции, производительность, чек-листы.",
+  "keywords": [
+    "1c",
+    "1С",
+    "1c-enterprise",
+    "bsl",
+    "v8std",
+    "1c-dev-rules",
+    "запросы 1С",
+    "формы 1С",
+    "метаданные 1С",
+    "код-ревью 1С"
+  ],
+  "author": "Roman",
+  "homepage": "https://github.com/Roman-repo/1c-dev-rules",
+  "license": "MIT",
+  "skills": "./skills/",
+  "skillInstructions": "Use the 1c-* skills for any 1C:Enterprise 8 (1С:Предприятие 8) development or code-review task: BSL code, queries, managed forms, metadata XML (.mdo/.form), transactions, extensions, reports (СКД), security/RLS, performance. Always open the 1c-dispatch-gate skill FIRST — it routes the task to the thematic skills and lists mandatory gate checks. After writing code, run the 1c-thin-triggers self-check and 1c-code-review. When creating or editing metadata objects, dogfood scripts/validate-new-object.sh on the object directory. Do not invent BSL API — verify functions exist in the project sources."
+}
