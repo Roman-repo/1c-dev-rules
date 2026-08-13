@@ -1,7 +1,7 @@
 # 1c-dev-rules
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE)
-[![Version: 0.3.0](https://img.shields.io/badge/version-0.3.0-blue.svg)](./docs/CHANGELOG.md)
+[![Version: 0.5.7](https://img.shields.io/badge/version-0.5.7-blue.svg)](./docs/CHANGELOG.md)
 [![Skills: 22](https://img.shields.io/badge/skills-22-green.svg)](#что-внутри)
 [![Platform: ZCode](https://img.shields.io/badge/platform-ZCode-purple.svg)](#как-подключить)
 [![1С:Предприятие 8](https://img.shields.io/badge/1С-Предприятие%208-red.svg)](https://v8.1c.ru)
@@ -177,6 +177,7 @@ git clone https://github.com/Roman-repo/1c-dev-rules ~/Projects/1c-dev-rules
 │   └── <name>/
 │       ├── SKILL.md            ← frontmatter + мини-сводка (≤500 строк)
 │       └── references/*.md     ← полные карточки, progressive disclosure
+├── scripts/                    ← validate-new-object.sh (X1–X13), validate_skills.py, bump-version.sh
 ├── std/                        ← 15 оглавлений v8std (справочный слой)
 └── docs/                       ← ARCHITECTURE, SOURCES, CHANGELOG
 ```
@@ -246,14 +247,14 @@ license: MIT
 
 ## Статус и roadmap
 
-**Текущий: ✅ v0.3.0** — 22 скила + 29 references + 15 std + автоварификатор (validate_skills.py) + CI + тесты. Карточки обезличены, без привязки к конкретным конфигурациям. Добавлен `1c-testing`, `1c-extensions` усилен граблями ролей 8.3.27.
+**Текущий: ✅ v0.5.7** — 22 скила + 29 references + 15 std + автоварификатор скилов (`scripts/validate_skills.py`) + **скрипт автопроверки метаданных `scripts/validate-new-object.sh`** (распознаёт 13 типов объектов, сверяет кросс-файловые цепочки X1–X13 при ручной правке XML без EDT — UUID/роли/подсистемы/обработчики/схемы СКД) + `bump-version.sh` + CI. Карточки обезличены, без привязки к конкретным конфигурациям. Плагин прошёл **5 полевых тестирований** на реальном проекте 1С (обработки, проведение, РЗ, HTTP/CFE/подписки/безопасность, отчёты СКД) — каждый цикл «реальная задача → dogfooding → фикс правил».
 
 | Статус | Что |
 |---|---|
-| ✅ Готово | Каркас плагина, 22 скила, публикация на GitHub |
+| ✅ Готово | Каркас плагина, 22 скила, публикация на GitHub, 5 полевых тестов, `validate-new-object.sh` (13 типов, X1–X13) |
 | 🧪 Тестируется | Совместимость с Claude Code / Codex / Cursor |
-| 📋 Планируется (v0.2) | Тестирование на реальных проектах; миграция исходного проекта-донора; проверка триггеров в Claude Code |
-| 💡 Идеи (v0.3+) | Локализация карточек на английский; скрипты автопроверки структуры; интеграция с BSL Language Server |
+| 📋 Планируется | Полевые тесты оставшихся классов (формы); X14 (согласование `&параметр↔<parameter>` в СКД); расширение списка типов в `validate` |
+| 💡 Идеи | Локализация карточек на английский; интеграция с BSL Language Server |
 
 Журнал версий — [docs/CHANGELOG.md](./docs/CHANGELOG.md).
 
