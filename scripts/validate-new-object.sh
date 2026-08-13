@@ -94,8 +94,16 @@ case "$OBJ_TYPE_DIR" in
     ScheduledJobs)              OBJ_TYPE_SG="ScheduledJob" ;;
     HTTPServices)               OBJ_TYPE_SG="HTTPService" ;;
     WebServices)                OBJ_TYPE_SG="WebService" ;;
+    EventSubscriptions)         OBJ_TYPE_SG="EventSubscription" ;;
     *)                          OBJ_TYPE_SG="" ;;
 esac
+
+# Тип не распознан (Enums, Settings, DefinedTypes и т.п. не покрыты). Кросс-файловые
+# проверки §7 (X6/X7/X8/X12…) Gate'ятся на непустом OBJ_TYPE_SG и молча пропускаются —
+# без этого флага скрипт выдал бы ложный «✅ все проверки пройдены» для неизвестного
+# типа (4-й полевой тест, кейс G: EventSubscription до фиксуса не распознавался).
+TYPE_UNKNOWN=0
+[[ -z "$OBJ_TYPE_SG" ]] && TYPE_UNKNOWN=1
 
 # У каких типов есть ОБЪЕКТНЫЕ права (№532). CommonModule и ScheduledJob объектных
 # прав НЕ имеют (метод/РЗ вызывается платформой, роли на них не ставятся) — для них
@@ -444,6 +452,34 @@ if [[ "$OBJ_TYPE_SG" == "ScheduledJob" ]] && [[ -n "$MDO" ]]; then
     fi
 fi
 
+# §7 X12 (EventSubscription): <handler>CommonModule.Имя.Метод</handler> ↔ реальный
+# Экспорт-метод в Module.bsl общего модуля. Опечатка/отсутствие модуля или метода →
+# подписка молча не сработает (событие уйдёт в несуществующий/неэкспортный обработчик).
+# Прямой аналог X8 (methodName РЗ). (4-й полевой тест, кейс G: EventSubscription
+# вообще не распознавался, handler не проверялся.)
+if [[ "$OBJ_TYPE_SG" == "EventSubscription" ]] && [[ -n "$MDO" ]]; then
+    hn=$(grep -oE '<handler>[^<]+</handler>' "$MDO" | sed -E 's/<\/?handler>//g' | head -1)
+    if [[ -z "$hn" ]]; then
+        fail "X12: нет <handler> в .mdo — подписка без обработчика не сработает"
+    else
+        # sed -E (ERE): переносимо между GNU и BSD/macOS (как в X8).
+        mod_name=$(echo "$hn"   | sed -nE 's/^CommonModule\.([^.]+)\..*$/\1/p')
+        meth_name=$(echo "$hn" | sed -nE 's/^CommonModule\.[^.]+\.(.*)$/\1/p')
+        mod_bsl="$SRC_ROOT/CommonModules/$mod_name/Module.bsl"
+        if [[ -z "$mod_name" ]] || [[ -z "$meth_name" ]]; then
+            warn "X12: handler '$hn' не вида 'CommonModule.Имя.Метод' — сверьте вручную"
+        elif [[ ! -f "$mod_bsl" ]]; then
+            fail "X12: '$hn' → общий модуль CommonModules/$mod_name/Module.bsl не найден"
+        elif ! grep -qE "(Процедура|Функция)[[:space:]]+$meth_name[[:space:]]*\(" "$mod_bsl"; then
+            fail "X12: метод '$meth_name' не определён в $mod_bsl (handler '$hn' битый)"
+        elif ! grep -qE "(Процедура|Функция)[[:space:]]+$meth_name[[:space:]]*\([^)]*\)[[:space:]]*Экспорт" "$mod_bsl"; then
+            warn "X12: метод '$meth_name' найден, но без 'Экспорт' — подписка его не вызовет"
+        else
+            ok "X12: handler '$hn' → метод '$meth_name' существует и Экспорт"
+        fi
+    fi
+fi
+
 echo
 
 # =====================================================================
@@ -462,6 +498,15 @@ if [[ $FAIL_COUNT -gt 0 ]]; then
 fi
 
 echo
+if [[ "$TYPE_UNKNOWN" -eq 1 ]]; then
+    echo "⚠️  ВНИМАНИЕ: тип '$OBJ_TYPE_DIR' не распознан скриптом."
+    echo "   Кросс-файловые проверки §7 (X6 регистрация, X7 роли, X8/X12 обработчики) ПРОПУЩЕНЫ."
+    echo "   Не доверяйте сообщению «все проверки пройдены» — сверьте объект вручную и"
+    echo "   обязательно проверьте в EDT."
+    echo "   Поддерживаемые типы: Catalog, Document, DataProcessor, InformationRegister,"
+    echo "   AccumulationRegister, Constant, ChartOfCharacteristicTypes, CommonModule,"
+    echo "   ScheduledJob, HTTPService, WebService, EventSubscription."
+fi
 echo "✅ Все критичные проверки пройдены."
 echo "   ⚠️  Скрипт НЕ заменяет EDT-валидацию — импортируйте объект в EDT и проверьте,"
 echo "   что форма открывается визуально."
