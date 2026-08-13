@@ -95,6 +95,7 @@ case "$OBJ_TYPE_DIR" in
     HTTPServices)               OBJ_TYPE_SG="HTTPService" ;;
     WebServices)                OBJ_TYPE_SG="WebService" ;;
     EventSubscriptions)         OBJ_TYPE_SG="EventSubscription" ;;
+    Reports)                    OBJ_TYPE_SG="Report" ;;
     *)                          OBJ_TYPE_SG="" ;;
 esac
 
@@ -112,7 +113,7 @@ TYPE_UNKNOWN=0
 # HTTPService/WebService имеют право Use (не Read/Update) — но проверку «объект в роли»
 # (X7) для них тоже надо гонять, поэтому они в HAS_RIGHTS (G4 3-го полевого теста).
 case "$OBJ_TYPE_SG" in
-    Catalog|Document|DataProcessor|InformationRegister|AccumulationRegister|Constant|ChartOfCharacteristicTypes|HTTPService|WebService)
+    Catalog|Document|DataProcessor|InformationRegister|AccumulationRegister|Constant|ChartOfCharacteristicTypes|HTTPService|WebService|Report)
         HAS_RIGHTS=1 ;;
     *)  HAS_RIGHTS=0 ;;
 esac
@@ -122,8 +123,9 @@ esac
 # обычно НЕ входят (служебные, интеграционные, управляются через формы/настройки) —
 # для них X7b понижаем до INFO, иначе ложный WARN на каждом таком объекте
 # (4-й полевой тест, кейс F = G2 3-й сессии: рег. очереди/логов, HTTP-сервисы).
+# Report — пользовательский отчёт, виден в подсистеме отчётов (5-й полевой тест, кейс B).
 case "$OBJ_TYPE_SG" in
-    Catalog|Document|DataProcessor|ChartOfCharacteristicTypes)
+    Catalog|Document|DataProcessor|ChartOfCharacteristicTypes|Report)
         HAS_UI=1 ;;
     *)  HAS_UI=0 ;;
 esac
@@ -337,8 +339,15 @@ fi
 DIRECTIVES_RE='^(НаКлиенте|НаСервере|НаСервереБезКонтекста|НаКлиентеНаСервере|НаКлиентеНаСервереБезКонтекста|НаКлиентеНаСервереБезВозвратаНаКлиента|НаКлиентеНаСервереБезКонтекстаВозвратНаКлиента|Перед|После|Вместо|ИзменениеИКонтроль)$'
 X5_FILES=()
 for m in "${FORM_MODULES[@]:-}"; do [[ -n "$m" ]] && X5_FILES+=("$m"); done
-[[ -n "$OBJ_MODULE" ]] && X5_FILES+=("$OBJ_MODULE")
-[[ -n "$MGR_MODULE" ]] && X5_FILES+=("$MGR_MODULE")
+# ObjectModule/ManagerModule ОТЧЁТА содержат запросы СКД: их параметры &X связаны
+# через схему компоновки / КомпоновщикНастроек, а НЕ через Запрос.УстановитьПараметр.
+# Поэтому для Report эти модули из X5 исключаем — иначе ложный FAIL «рассогласование».
+# Корректность СКД-параметров отчёта проверяет X13 (mainDataCompositionSchema↔Template).
+# (5-й полевой тест, кейс B: X5 ложился на существующий отчёт с инлайн-запросом СКД.)
+if [[ "$OBJ_TYPE_SG" != "Report" ]]; then
+    [[ -n "$OBJ_MODULE" ]] && X5_FILES+=("$OBJ_MODULE")
+    [[ -n "$MGR_MODULE" ]] && X5_FILES+=("$MGR_MODULE")
+fi
 [[ -n "$CM_MODULE" ]]  && X5_FILES+=("$CM_MODULE")
 
 if [[ ${#X5_FILES[@]} -gt 0 ]]; then
@@ -494,6 +503,36 @@ if [[ "$OBJ_TYPE_SG" == "EventSubscription" ]] && [[ -n "$MDO" ]]; then
     fi
 fi
 
+# §7 X13 (Report): <mainDataCompositionSchema> в .mdo ↔ реальный шаблон СКД
+# (Templates/<Имя>/Template.dcs) с templateType=DataCompositionSchema. Опечатка в
+# имени шаблона или отсутствие файла схемы → отчёт падает при открытии/формировании.
+# Прямой аналог X8 (methodName РЗ) / X12 (handler подписки), но для схемы компоновки.
+# (5-й полевой тест, кейс B: Report не распознавался, схема не проверялась.)
+if [[ "$OBJ_TYPE_SG" == "Report" ]] && [[ -n "$MDO" ]]; then
+    mdc=$(grep -oE '<mainDataCompositionSchema>[^<]+</mainDataCompositionSchema>' "$MDO" \
+          | sed -E 's/<\/?mainDataCompositionSchema>//g' | head -1)
+    if [[ -z "$mdc" ]]; then
+        # Допустимо: схема задаётся программно или отчёт без СКД (только обработчики).
+        info "X13: нет <mainDataCompositionSchema> в .mdo — отчёт без схемы СКД"
+    else
+        # Report.торо_Имя.Template.ИмяШаблона → ИмяШаблона
+        tpl_name=$(echo "$mdc" | sed -nE 's/^.*\.Template\.([^./]+).*$/\1/p')
+        if [[ -z "$tpl_name" ]]; then
+            warn "X13: mainDataCompositionSchema '$mdc' не вида '...Template.Имя' — сверьте вручную"
+        elif ! grep -q "<name>$tpl_name</name>" "$MDO" \
+           || ! grep -q '<templateType>DataCompositionSchema</templateType>' "$MDO"; then
+            fail "X13: шаблон '$tpl_name' не объявлен в .mdo (<templates>) или не DataCompositionSchema"
+        else
+            dcs="$OBJ_PATH/Templates/$tpl_name/Template.dcs"
+            if [[ -f "$dcs" ]]; then
+                ok "X13: mainDataCompositionSchema '$mdc' → шаблон '$tpl_name' (Template.dcs найден)"
+            else
+                fail "X13: шаблон '$tpl_name' объявлен, но Templates/$tpl_name/Template.dcs не найден"
+            fi
+        fi
+    fi
+fi
+
 echo
 
 # =====================================================================
@@ -519,7 +558,7 @@ if [[ "$TYPE_UNKNOWN" -eq 1 ]]; then
     echo "   обязательно проверьте в EDT."
     echo "   Поддерживаемые типы: Catalog, Document, DataProcessor, InformationRegister,"
     echo "   AccumulationRegister, Constant, ChartOfCharacteristicTypes, CommonModule,"
-    echo "   ScheduledJob, HTTPService, WebService, EventSubscription."
+    echo "   ScheduledJob, HTTPService, WebService, EventSubscription, Report."
 fi
 echo "✅ Все критичные проверки пройдены."
 echo "   ⚠️  Скрипт НЕ заменяет EDT-валидацию — импортируйте объект в EDT и проверьте,"
