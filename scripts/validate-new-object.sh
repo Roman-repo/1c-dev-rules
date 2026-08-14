@@ -283,6 +283,30 @@ for FORM in "${FORMS[@]:-}"; do
         info "F4 [$fname]: DataPath — сверьте корневой сегмент с <attributes>:"
         echo "$segs" | sed 's/^/      /'
     fi
+
+    # §6 F10 (№630): канонические области модуля формы. 4 обязательные — даже пустые;
+    # таблице формы (включая таблицу динамического списка) — своя область
+    # «ОбработчикиСобытийЭлементовТаблицыФормы<Имя>». Отсутствие областей у типовой
+    # (легаси) формы — не блокер, поэтому недостающие области → WARN, а не FAIL.
+    # (6-й полевой тест, кейс E: области модуля формы скрипт не проверял вообще.)
+    fmod="${FORM%Form.form}Module.bsl"
+    if [[ -f "$fmod" ]]; then
+        if ! grep -q '#Область' "$fmod"; then
+            warn "F10 [$fname]: в модуле формы нет ни одной #Область (№630) — легаси-модуль?"
+        else
+            f10_missing=""
+            for f10_region in ОбработчикиСобытийФормы ОбработчикиСобытийЭлементовШапкиФормы \
+                              ОбработчикиКомандФормы СлужебныеПроцедурыИФункции; do
+                grep -qE "^#Область[[:space:]]+${f10_region}([[:space:]]|\$)" "$fmod" \
+                    || f10_missing="$f10_missing $f10_region"
+            done
+            if [[ -z "$f10_missing" ]]; then
+                ok "F10 [$fname]: канонические области модуля формы присутствуют (№630)"
+            else
+                warn "F10 [$fname]: отсутствуют области модуля формы (№630):$f10_missing"
+            fi
+        fi
+    fi
 done
 
 echo
@@ -329,6 +353,122 @@ else
             info "X1: проверено $req_count реквизитов; $req_missing не найдены в формах"
         fi
     fi
+fi
+
+# §7 X2/X3/X4 (формы): автоматизация F4 + цепочки команд и обработчиков.
+# Одна Python-проходка на форму (надёжный разбор вложенного XML, где grep
+# смешивает пулы items/attributes/formCommands):
+#   X2 — корневой сегмент каждого dataPath есть в <attributes> формы
+#        (кроме служебного «Items…» — пути к текущим данным таблиц);
+#   X3 — commandName «Form.Command.X» → команда X объявлена в <formCommands>
+#        → её handler существует в Module.bsl формы;
+#   X4 — каждый <handlers><name>Y</name> (события формы, элементов, таблиц,
+#        включая OnGetDataAtServer динамического списка) → «Процедура Y(…)»
+#        в Module.bsl формы.
+# (6-й полевой тест, кейс E: X2/X3/X4 были заявлены в §7.1 metadata-xml.md,
+#  но скриптом НЕ проверялись — цепочки команд/обработчиков ручной правки
+#  формы оставались без автопроверки.)
+if [[ ${#FORMS[@]} -gt 0 ]]; then
+    for FORM in "${FORMS[@]:-}"; do
+        [[ -z "$FORM" ]] && continue
+        fname=$(basename "$(dirname "$FORM")")
+        fmod="${FORM%Form.form}Module.bsl"
+        while IFS= read -r verdict; do
+            [[ -z "$verdict" ]] && continue
+            case "$verdict" in
+                OK:*)   ok   "X2/X3/X4 [$fname]: ${verdict#OK: }" ;;
+                FAIL:*) fail "X2/X3/X4 [$fname]: ${verdict#FAIL: }" ;;
+                WARN:*) warn "X2/X3/X4 [$fname]: ${verdict#WARN: }" ;;
+                *)      info "X2/X3/X4 [$fname]: $verdict" ;;
+            esac
+        done < <(python3 - "$FORM" "$fmod" <<'PY'
+import os, re, sys
+import xml.etree.ElementTree as ET
+
+form_path, mod_path = sys.argv[1], sys.argv[2]
+try:
+    root = ET.parse(form_path).getroot()
+except Exception as e:
+    print(f"WARN: Form.form не разобран ({e}) — сверьте вручную")
+    sys.exit(0)
+
+mod = None
+if os.path.exists(mod_path):
+    mod = open(mod_path, encoding="utf-8").read()
+
+def in_module(proc):
+    return mod is not None and re.search(
+        r"(Процедура|Функция)\s+" + re.escape(proc) + r"\s*\(", mod) is not None
+
+# X2: корневой сегмент dataPath ↔ <attributes>
+attrs = {a.find("name").text for a in root.findall("attributes")
+         if a.find("name") is not None}
+bad_x2 = []
+for s in root.iter("segments"):
+    seg = (s.text or "").strip()
+    rootseg = seg.split(".")[0]
+    # «Items.Список.CurrentData…» — служебные пути к текущим данным таблиц
+    if rootseg and rootseg not in attrs and rootseg != "Items":
+        bad_x2.append(seg)
+if bad_x2:
+    for seg in bad_x2:
+        print(f"FAIL: dataPath '{seg}' — корневой сегмент '{seg.split('.')[0]}' "
+              f"не объявлен в <attributes> (X2)")
+else:
+    print(f"OK: корневые сегменты dataPath объявлены в <attributes> (X2, сегментов: "
+          f"{sum(1 for _ in root.iter('segments'))})")
+
+# X3: команды формы
+cmds = {}  # имя команды → имя handler (или None)
+for c in root.findall("formCommands"):
+    n = c.find("name")
+    h = c.find(".//handler/name")
+    if n is not None:
+        cmds[n.text] = (h.text or "").strip() if h is not None else None
+
+x3_bad = 0
+for b in root.iter("commandName"):
+    cn = (b.text or "").strip()
+    if not cn.startswith("Form.Command."):
+        continue  # Form.StandardCommand.*, Form.Item.* — всегда валидны
+    x = cn.split(".")[-1]
+    if x not in cmds:
+        print(f"FAIL: commandName '{cn}' → команда '{x}' не объявлена в <formCommands> (X3)")
+        x3_bad += 1
+for name, handler in cmds.items():
+    if not handler:
+        print(f"FAIL: команда '{name}' без action/handler — не выполнится (X3)")
+        x3_bad += 1
+    elif mod is None:
+        print(f"WARN: команда '{name}' → Module.bsl формы не найден (X3)")
+        x3_bad += 1
+    elif not in_module(handler):
+        print(f"FAIL: команда '{name}': handler '{handler}' не найден в Module.bsl формы (X3)")
+        x3_bad += 1
+if x3_bad == 0 and cmds:
+    print(f"OK: команды формы разрешаются, handlers в Module.bsl (X3, команд: {len(cmds)})")
+
+# X4: обработчики событий (форма, элементы, таблицы, OnGetDataAtServer ДС)
+x4_cnt, x4_bad = 0, 0
+for h in root.iter("handlers"):
+    n = h.find("name")
+    if n is None or not (n.text or "").strip():
+        print("FAIL: пустой <handlers><name> — событие не сработает (X4)")
+        x4_bad += 1
+        continue
+    x4_cnt += 1
+    nm = n.text.strip()
+    if mod is None:
+        print(f"WARN: обработчик '{nm}' → Module.bsl формы не найден (X4)")
+        x4_bad += 1
+    elif not in_module(nm):
+        print(f"FAIL: обработчик '{nm}' не найден в Module.bsl формы (X4)")
+        x4_bad += 1
+if x4_bad == 0 and x4_cnt:
+    print(f"OK: обработчики событий найдены в Module.bsl (X4, обработчиков: {x4_cnt})")
+PY
+)
+    done
 fi
 
 # §7 X5: параметры запроса — &X в тексте ↔ УстановитьПараметр("X", ...).
