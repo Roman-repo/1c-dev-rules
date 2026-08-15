@@ -1,7 +1,7 @@
 {
   "$schema": "https://catalog.deva.msh.team/schemas/kimi.plugin.schema.json",
   "name": "1c-dev-rules",
-  "version": "0.11.1",
+  "version": "0.11.2",
   "description": "Универсальный подключаемый набор правил разработки 1С:Предприятие 8 на основе v8std. Скилы для написания и ревью кода: запросы, формы, метаданные, транзакции, производительность, чек-листы.",
   "keywords": [
     "1c",
