@@ -355,7 +355,7 @@ else
     fi
 fi
 
-# §7 X2/X3/X4 (формы): автоматизация F4 + цепочки команд и обработчиков.
+# §7 X2/X3/X4/X15 (формы): автоматизация F4 + цепочки команд и обработчиков.
 # Одна Python-проходка на форму (надёжный разбор вложенного XML, где grep
 # смешивает пулы items/attributes/formCommands):
 #   X2 — корневой сегмент каждого dataPath есть в <attributes> формы
@@ -364,10 +364,18 @@ fi
 #        → её handler существует в Module.bsl формы;
 #   X4 — каждый <handlers><name>Y</name> (события формы, элементов, таблиц,
 #        включая OnGetDataAtServer динамического списка) → «Процедура Y(…)»
-#        в Module.bsl формы.
+#        в Module.bsl формы;
+#   X15 — queryText динамических списков: нет СОЕДИНЕНИЙ с виртуальными
+#        таблицами и подзапросами напрямую (№655/№732), ВТ без даты — WARN
+#        (№733), «ОБЪЕДИНИТЬ» без «ВСЕ» — WARN (№434). Разыменования через
+#        точку (№732) не проверяются: эвристика по путям даёт ложные
+#        срабатывания на таблицы-источники — остаётся ручной grep.
 # (6-й полевой тест, кейс E: X2/X3/X4 были заявлены в §7.1 metadata-xml.md,
 #  но скриптом НЕ проверялись — цепочки команд/обработчиков ручной правки
 #  формы оставались без автопроверки.)
+# (7-й полевой тест, кейс E': вендорская ФормаЭлемента торо_ОбъектыРемонта
+#  соединялась с ВТ СрезПоследних прямо в ДС (Form.form:31342, 35226) —
+#  структурные проверки это не ловили, текст запроса ДС скрипт не читал.)
 if [[ ${#FORMS[@]} -gt 0 ]]; then
     for FORM in "${FORMS[@]:-}"; do
         [[ -z "$FORM" ]] && continue
@@ -376,10 +384,10 @@ if [[ ${#FORMS[@]} -gt 0 ]]; then
         while IFS= read -r verdict; do
             [[ -z "$verdict" ]] && continue
             case "$verdict" in
-                OK:*)   ok   "X2/X3/X4 [$fname]: ${verdict#OK: }" ;;
-                FAIL:*) fail "X2/X3/X4 [$fname]: ${verdict#FAIL: }" ;;
-                WARN:*) warn "X2/X3/X4 [$fname]: ${verdict#WARN: }" ;;
-                *)      info "X2/X3/X4 [$fname]: $verdict" ;;
+                OK:*)   ok   "X2/X3/X4/X15 [$fname]: ${verdict#OK: }" ;;
+                FAIL:*) fail "X2/X3/X4/X15 [$fname]: ${verdict#FAIL: }" ;;
+                WARN:*) warn "X2/X3/X4/X15 [$fname]: ${verdict#WARN: }" ;;
+                *)      info "X2/X3/X4/X15 [$fname]: $verdict" ;;
             esac
         done < <(python3 - "$FORM" "$fmod" <<'PY'
 import os, re, sys
@@ -466,6 +474,31 @@ for h in root.iter("handlers"):
         x4_bad += 1
 if x4_bad == 0 and x4_cnt:
     print(f"OK: обработчики событий найдены в Module.bsl (X4, обработчиков: {x4_cnt})")
+
+# X15: queryText динамических списков — №655/№732/№733/№434.
+# ДС — самый «горячий» запрос формы (перевыполняется у каждого пользователя),
+# поэтому соединение с ВТ/подзапросом напрямую здесь — FAIL.
+x15_q, x15_bad = 0, 0
+for qt in root.iter("queryText"):
+    x15_q += 1
+    q = (qt.text or "").replace("&amp;", "&")
+    for m in re.finditer(
+        r"СОЕДИНЕНИЕ\s+(\S+?)\.(Остатки|СрезПоследних|Обороты|ОстаткиИОбороты|Баланс)\s*\(", q):
+        x15_bad += 1
+        print(f"FAIL: ДС queryText: СОЕДИНЕНИЕ с виртуальной таблицей "
+              f"{m.group(1)}.{m.group(2)}( напрямую — вынести во временную таблицу (№655/№732)")
+    if re.search(r"СОЕДИНЕНИЕ\s*\(\s*ВЫБРАТЬ", q):
+        x15_bad += 1
+        print("FAIL: ДС queryText: СОЕДИНЕНИЕ с подзапросом «(ВЫБРАТЬ…)» напрямую (№655/№732)")
+    for m in re.finditer(r"(Остатки|СрезПоследних)\s*\(\s*,", q):
+        x15_bad += 1
+        print(f"WARN: ДС queryText: ВТ {m.group(1)}( вызвана без параметра даты — "
+              f"передайте дату и отбор, либо подтвердите осознанность актуального среза (№733)")
+    if re.search(r"ОБЪЕДИНИТЬ(?!\s+ВСЕ)", q):
+        x15_bad += 1
+        print("WARN: ДС queryText: «ОБЪЕДИНИТЬ» без «ВСЕ» — неявный DISTINCT (№434)")
+if x15_q > 0 and x15_bad == 0:
+    print(f"OK: queryText ДС без ВТ в соединениях и ВТ без даты (X15, запросов: {x15_q})")
 PY
 )
     done
@@ -671,6 +704,62 @@ if [[ "$OBJ_TYPE_SG" == "Report" ]] && [[ -n "$MDO" ]]; then
             fi
         fi
     fi
+fi
+
+# §7 X14 (Report/СКД): параметры запроса схемы ↔ <parameter> схемы — B-3, аналог
+# X5 для СКД. Каждый &X в <query> схемы должен быть объявлен как <parameter><name>X:
+# необъявленный параметр → СКД не даст его настроить («параметр не найден», тихий
+# пустой результат). Обратное (объявлен, но не в запросе) — INFO: параметр может
+# использоваться в выражениях вычисляемых полей и настройках.
+# Разбор с явным namespace схемы: dcscor:parameter из настроек — ДРУГОЙ namespace,
+# совпадение по локальному имени путало бы ссылки настроек с объявлениями.
+# (7-й полевой тест, кейс P4: B-3 был задокументирован в thin-triggers как ручной
+#  grep — теперь автоматизировано. Полигон: Reports/торо_РасходЗапчастейПоОбъектамРемонта.)
+if [[ "$OBJ_TYPE_SG" == "Report" ]] && [[ -n "$OBJ_PATH" ]]; then
+    while IFS= read -r dcs; do
+        [[ -z "$dcs" ]] && continue
+        tname=$(basename "$(dirname "$dcs")")
+        while IFS= read -r verdict; do
+            [[ -z "$verdict" ]] && continue
+            case "$verdict" in
+                OK:*)   ok   "X14 [$tname]: ${verdict#OK: }" ;;
+                FAIL:*) fail "X14 [$tname]: ${verdict#FAIL: }" ;;
+                WARN:*) warn "X14 [$tname]: ${verdict#WARN: }" ;;
+                *)      info "X14 [$tname]: $verdict" ;;
+            esac
+        done < <(python3 - "$dcs" <<'PY'
+import re, sys
+import xml.etree.ElementTree as ET
+try:
+    root = ET.parse(sys.argv[1]).getroot()
+except Exception as e:
+    print(f"WARN: схема не разобрана ({e}) — сверьте вручную")
+    sys.exit(0)
+NS = "{http://v8.1c.ru/8.1/data-composition-system/schema}"
+qparams = set()
+for q in root.iter(f"{NS}query"):
+    qparams |= set(re.findall(r"&([А-Яа-яA-Za-zЁё_]+)", (q.text or "")))
+declared = set()
+for p in root.findall(f"{NS}parameter"):
+    n = p.find(f"{NS}name")
+    if n is not None and (n.text or "").strip():
+        declared.add(n.text.strip())
+missing = qparams - declared
+unused = declared - qparams
+if missing:
+    for x in sorted(missing):
+        print(f"FAIL: параметр запроса '&{x}' не объявлен в <parameter> схемы — "
+              f"настроить будет нельзя (B-3/X14)")
+elif qparams:
+    print(f"OK: все параметры запроса объявлены в схеме ({len(qparams)} шт.)")
+else:
+    print("INFO: в запросе схемы нет параметров &X")
+if unused:
+    print(f"INFO: объявлены, но не в запросе (возможно, для выражений/настроек): "
+          f"{', '.join(sorted(unused))}")
+PY
+)
+    done < <(find "$OBJ_PATH/Templates" -name "Template.dcs" 2>/dev/null)
 fi
 
 echo
