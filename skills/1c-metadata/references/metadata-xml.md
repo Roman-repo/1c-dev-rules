@@ -165,6 +165,8 @@ grep -oE '<segments>[^<]+</segments>' Forms/Форма/Form.form
 | **X11** | Расширение (CFE): каждый `&ИзменениеИКонтроль(...)` сопровождается `ПродолжитьВызов()`, иначе оригинальный метод не выполнится | Module.bsl расширения (внутри) |
 | **X12** | Подписка на событие: `.mdo` `<handler>CommonModule.Имя.Метод</handler>` ↔ `Процедура Метод(...) Экспорт` в `Module.bsl` общего модуля. Опечатка → событие уходит в несуществующий обработчик | .mdo + CommonModules/…/Module.bsl |
 | **X13** | Отчёт (Report): `.mdo` `<mainDataCompositionSchema>…Template.Имя</…>` ↔ `Templates/<Имя>/Template.dcs` существует, а шаблон объявлен в `<templates>` с `templateType=DataCompositionSchema`. Опечатка → отчёт падает при открытии | .mdo + Templates/…/Template.dcs |
+| **X14** | Схема СКД (`Template.dcs`): параметр `&X` в тексте запроса ↔ `<parameter><name>X</name>` в схеме компоновки. Опечатка → тихий пустой результат | Templates/…/Template.dcs (внутри) |
+| **X15** | Динамический список: `<queryText>` без СОЕДИНЕНИЙ с виртуальными таблицами и подзапросами напрямую (№655/№732 — FAIL), ВТ без параметра даты — №733 (WARN), `ОБЪЕДИНИТЬ` без `ВСЕ` — №434 (WARN). Разыменования через точку (№732) — ручной grep | Form.form (внутри) |
 
 ### 7.2. Автоматическая проверка
 
@@ -174,7 +176,7 @@ grep -oE '<segments>[^<]+</segments>' Forms/Форма/Form.form
 bash scripts/validate-new-object.sh /path/to/src/Catalogs/ВашОбъект
 ```
 
-Скрипт проходит проверки §6 (UUID/ID/DataPath/companions/области модуля формы №630) + §7 (X1–X13, включая X2/X3/X4 для форм: dataPath↔attributes, commandName↔formCommands↔Module.bsl, handlers↔Module.bsl) и печатает отчёт PASS/FAIL. Не заменяет EDT-валидацию, но ловит 80% типовых багов ручной правки.
+Скрипт проходит проверки §6 (UUID/ID/DataPath/companions/области модуля формы №630) + §7 (X1–X15, включая X2/X3/X4 для форм: dataPath↔attributes, commandName↔formCommands↔Module.bsl, handlers↔Module.bsl; X15 — queryText динамических списков на №655/№732/№733/№434) и печатает отчёт PASS/FAIL. Не заменяет EDT-валидацию, но ловит 80% типовых багов ручной правки.
 
 Поддерживаемые типы (распознаются и проверяются кросс-файлово): `Catalog`, `Document`, `DataProcessor`, `InformationRegister`, `AccumulationRegister`, `Constant`, `ChartOfCharacteristicTypes`, `CommonModule`, `ScheduledJob`, `HTTPService`, `WebService`, `EventSubscription`, `Report`. Для нераспознанного типа скрипт предупреждает, что кросс-файловые проверки пропущены (не доверяйте «все проверки пройдены»).
 
