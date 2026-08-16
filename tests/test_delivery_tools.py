@@ -66,9 +66,43 @@ class TestMarkdownHelpers(unittest.TestCase):
     def test_status_counts_dual_static_and_deferred(self):
         m = dt.Matrix(rows=[dt.MatrixRow("1", "к", "1", "о", "п", "✅ статич. (05) / ⏳ интерактивно")])
         c = m.status_counts()
-        self.assertEqual(c["ok_static"], ["1"])
+        self.assertEqual(c["ok"], ["1"])          # прошёл (статически)
+        self.assertEqual(c["ok_static"], ["1"])   # подмножество ok
         self.assertEqual(c["deferred"], ["1"])
         self.assertEqual(c["red"], [])
+
+    def test_status_counts_short_static_marker(self):
+        m = dt.Matrix(rows=[dt.MatrixRow("1", "к", "1", "о", "п", "✅с")])
+        c = m.status_counts()
+        self.assertEqual(c["ok"], ["1"])
+        self.assertEqual(c["ok_static"], ["1"])
+
+    def test_status_counts_red_overrides_pass(self):
+        """❌ в 06 сильнее ✅с в 05: критерий красный, не «прошедший»."""
+        m = dt.Matrix(rows=[dt.MatrixRow("1", "к", "1", "о", "п", "✅с ❌")])
+        c = m.status_counts()
+        self.assertEqual(c["red"], ["1"])
+        self.assertEqual(c["ok"], [])
+
+    def test_matrix_two_status_columns(self):
+        """Формат 0.13.0: «Статус 05»/«Статус 06» собираются в один статус строки."""
+        with tempfile.TemporaryDirectory() as tmp:
+            p = Path(tmp) / "04-acceptance-criteria.md"
+            p.write_text(
+                "# К\n\n## Матрица трассировки и критерии приёмки\n\n"
+                "| № | Критерий (проверяемо) | Шаг сценария | Объект/код (03) | Проверка | Статус 05 | Статус 06 |\n"
+                "|---|---|---|---|---|---|---|\n"
+                "| 1 | колонка | 1 | форма | ручная | ✅с | ⏳ |\n"
+                "| 2 | итог | 2 | форма | ручная | ✅с | ✅ |\n"
+                "| 3 | пусто | 1а.1 | форма | ручная | ✅с | ❌ |\n",
+                encoding="utf-8",
+            )
+            m = dt.parse_matrix(p)
+        c = m.status_counts()
+        self.assertEqual(c["ok"], ["1", "2"])              # ❌ в 06 исключает строку 3
+        self.assertEqual(c["ok_static"], ["1", "2"])       # 05 у обеих ✅с
+        self.assertEqual(c["deferred"], ["1"])             # ⏳ в 06
+        self.assertEqual(c["red"], ["3"])
 
 
 class TestStatusCommand(unittest.TestCase):

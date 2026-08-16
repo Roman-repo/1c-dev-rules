@@ -172,15 +172,20 @@ class Matrix:
     parse_error: Optional[str] = None
 
     def status_counts(self) -> Dict[str, List[str]]:
-        """Критерии по типу статуса: ok (✅), ok_static, deferred (⏳), red (❌), todo (☐/пусто)."""
-        out = {"ok": [], "ok_static": [], "deferred": [], "red": [], "todo": []}
+        """Критерии по типу статуса: ok — прошедшие (✅ в 05 или 06; ❌ сильнее ✅),
+        ok_static — подмножество ok со статическим evidence (✅с/«статич.»),
+        deferred (⏳), red (❌), todo (☐/пусто)."""
+        out: Dict[str, List[str]] = {"ok": [], "ok_static": [], "deferred": [], "red": [], "todo": []}
         for r in self.rows:
             if "❌" in r.status:
                 out["red"].append(r.num)
+            elif "✅" in r.status:
+                out["ok"].append(r.num)
+                # ✅с — компактный маркер 0.13.0, «статич.» — записи формата до 0.13.0
+                if "✅с" in r.status or "статич" in r.status.lower():
+                    out["ok_static"].append(r.num)
             if "⏳" in r.status:
                 out["deferred"].append(r.num)
-            if "✅" in r.status:
-                out["ok_static" if "статич" in r.status.lower() else "ok"].append(r.num)
             if "❌" not in r.status and "✅" not in r.status and "⏳" not in r.status:
                 out["todo"].append(r.num)
         return out
@@ -197,8 +202,10 @@ def parse_matrix(path: Path) -> Matrix:
     idx = {
         "num": col_index(headers, "№"), "criterion": col_index(headers, "Критерий"),
         "step": col_index(headers, "Шаг"), "obj": col_index(headers, "Объект"),
-        "check": col_index(headers, "Проверка"), "status": col_index(headers, "Статус"),
+        "check": col_index(headers, "Проверка"),
     }
+    # статусы: одна колонка «Статус» (формат до 0.13.0) или две — «Статус 05»/«Статус 06»
+    status_cols = [i for i, h in enumerate(headers) if "статус" in h.lower()]
     for r in rows:
         criterion = cell(r, idx["criterion"])
         if not criterion:  # заглушка шаблона
@@ -206,7 +213,8 @@ def parse_matrix(path: Path) -> Matrix:
         matrix.rows.append(MatrixRow(
             num=cell(r, idx["num"]), criterion=criterion,
             step=cell(r, idx["step"]), obj=cell(r, idx["obj"]),
-            check=cell(r, idx["check"]), status=cell(r, idx["status"]),
+            check=cell(r, idx["check"]),
+            status=" ".join(cell(r, i) for i in status_cols).strip(),
         ))
     return matrix
 
@@ -462,7 +470,7 @@ def cmd_status(task_dir: Path) -> int:
     if state.matrix and state.matrix.rows:
         c = state.matrix.status_counts()
         print(f"Матрица 04: {len(state.matrix.rows)} критериев — "
-              f"✅ {len(c['ok']) + len(c['ok_static'])} (статич. {len(c['ok_static'])}), "
+              f"✅ {len(c['ok'])} (статич. {len(c['ok_static'])}), "
               f"⏳ {len(c['deferred'])} ({fmt_nums(c['deferred'])}), "
               f"❌ {len(c['red'])} ({fmt_nums(c['red'])}), "
               f"☐ {len(c['todo'])} ({fmt_nums(c['todo'])})")
