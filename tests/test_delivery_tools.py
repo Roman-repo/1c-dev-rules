@@ -63,6 +63,42 @@ class TestMarkdownHelpers(unittest.TestCase):
         self.assertEqual(proto.round, 2)
         self.assertEqual(proto.decision, "Принято")
 
+    def test_protocol_review_date_parsing(self):
+        """Дата пересмотра «Отложено»: форматы ГГГГ-ММ-ДД и ДД.ММ.ГГГГ; отсутствие → None."""
+        with tempfile.TemporaryDirectory() as tmp:
+            p = Path(tmp) / "06-acceptance-protocol.md"
+            p.write_text(
+                "# П\n## Решение\n\n- [x] **Отложено** — нет среды\n\n"
+                "**Дата пересмотра (обязательна для «Отложено»):** 2026-09-01\n",
+                encoding="utf-8",
+            )
+            self.assertEqual(dt.parse_protocol(p).review_date, "2026-09-01")
+            p.write_text(
+                "# П\n## Решение\n\n- [x] **Отложено** — нет среды\n\n"
+                "**Дата пересмотра (обязательна для «Отложено»):** 01.09.2026\n",
+                encoding="utf-8",
+            )
+            self.assertEqual(dt.parse_protocol(p).review_date, "01.09.2026")
+            p.write_text(
+                "# П\n## Решение\n\n- [x] **Отложено** — нет среды\n\n"
+                "**Дата пересмотра (обязательна для «Отложено»):** <ГГГГ-ММ-ДД>\n",
+                encoding="utf-8",
+            )
+            self.assertIsNone(dt.parse_protocol(p).review_date)
+
+    def test_parse_date_formats(self):
+        self.assertEqual(dt._parse_date("2026-08-16"), dt.datetime(2026, 8, 16).date())
+        self.assertEqual(dt._parse_date("16.08.2026"), dt.datetime(2026, 8, 16).date())
+        self.assertIsNone(dt._parse_date("не дата"))
+
+    def test_comparative_without_baseline(self):
+        criteria = [
+            ("1", "Список открывается не дольше, чем до доработки", "замер времени открытия до/после"),
+            ("2", "Работает не хуже текущей версии", "проверить глазами"),
+            ("3", "1000 заявок выгружаются не дольше 10 секунд", "замер на тестовой базе"),
+        ]
+        self.assertEqual(dt.comparative_without_baseline(criteria), ["2"])
+
     def test_status_counts_dual_static_and_deferred(self):
         m = dt.Matrix(rows=[dt.MatrixRow("1", "к", "1", "о", "п", "✅ статич. (05) / ⏳ интерактивно")])
         c = m.status_counts()
@@ -117,6 +153,8 @@ class TestStatusCommand(unittest.TestCase):
         self.assertIn("ЧЕРНОВИК", out)
         self.assertIn("06-acceptance-protocol.r1.md", out)  # следующий шаг — возобновление
         self.assertIn("Возобновление (из", out)             # текст возобновления из 06
+        self.assertIn("Пересмотр «Отложено»: 2026-02-01", out)  # дата пересмотра из 06
+        self.assertIn("срок истёк", out)                     # просрочена — пометка для РП
 
     def test_accepted_reaches_release_stage(self):
         code, out = run_cli("status", FIXTURES / "accepted" / "TASK-A1")
@@ -144,6 +182,7 @@ class TestCheckCommand(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertIn("легальная пауза", out)
         self.assertIn("легален при «Отложено»", out)
+        self.assertIn("срок пересмотра «Отложено» истёк (2026-02-01)", out)  # просрочка — WARN, не ERR
         self.assertIn("ERR 0", out)
 
     def test_accepted_all_gates_pass(self):

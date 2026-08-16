@@ -25,6 +25,7 @@ from __future__ import annotations
 import re
 import sys
 from dataclasses import dataclass, field
+from datetime import date, datetime
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
@@ -50,6 +51,32 @@ DECISIONS = ("Принято с замечаниями", "Принято", "Во
 # --- разбор markdown --------------------------------------------------------
 
 SEP_CELL_RE = re.compile(r"^:?-{3,}:?$")
+
+# Сравнительные критерии и признаки зафиксированного базлайна (эвристики WARN,
+# не истина в последней инстанции): сравнительный критерий ссылается на
+# состояние «до» (не абсолютный порог) — без замера «до» он неверифицируем,
+# состояние «до» после разработки не повторить.
+COMPARATIVE_RE = re.compile(
+    r"чем до (доработки|изменений|правки)|как до"
+    r"|не (дольше|медленнее|хуже)[^.,;\n]*(текущ|прежн|стар|сейчас|до )"
+    r"|сопоставимо с (текущ|прежн|стар)", re.I)
+BASELINE_RE = re.compile(
+    r"базлайн|замер до|до/после|до правки|\d{2}\.\d{2}\.\d{4}|\d{4}-\d{2}-\d{2}", re.I)
+
+
+def comparative_without_baseline(criteria: List[Tuple[str, str, str]]) -> List[str]:
+    """Номера сравнительных критериев без признака базлайна в «Как проверим»."""
+    return [num for num, text, check in criteria
+            if COMPARATIVE_RE.search(text) and not BASELINE_RE.search(check)]
+
+
+def _parse_date(s: str) -> Optional[date]:
+    for fmt in ("%Y-%m-%d", "%d.%m.%Y"):
+        try:
+            return datetime.strptime(s, fmt).date()
+        except ValueError:
+            continue
+    return None
 
 
 def md_sections(text: str) -> Dict[str, str]:
@@ -261,6 +288,7 @@ class Protocol:
     decision: Optional[str] = None
     decisions_checked: List[str] = field(default_factory=list)
     resume_text: str = ""         # абзац «Возобновление приёмки» (при «Отложено»)
+    review_date: Optional[str] = None  # дата пересмотра «Отложено» (1c-external-acceptance)
     remark_classes: List[str] = field(default_factory=list)
 
 
@@ -285,6 +313,9 @@ def parse_protocol(path: Path) -> Protocol:
     m = re.search(r"\*\*Возобновление приёмки:\*\*\s*(.+?)(?:\n\n|\Z)", text, re.S)
     if m:
         proto.resume_text = re.sub(r"\s+", " ", m.group(1)).strip()
+    m = re.search(r"дата пересмотра[^:\n]*:\s*[^0-9<]*(\d{4}-\d{2}-\d{2}|\d{2}\.\d{2}\.\d{4})", text, re.I)
+    if m:
+        proto.review_date = m.group(1)
     remarks = find_section(sections, "Замечания")
     if remarks:
         headers, rows = table_rows(remarks)
@@ -486,8 +517,15 @@ def cmd_status(task_dir: Path) -> int:
     elif proto and proto.decision in ("Принято", "Принято с замечаниями"):
         print("Релиз: задача не включена ни в один релиз")
 
-    if proto and proto.decision == "Отложено" and proto.resume_text:
-        print(f"Возобновление (из {proto.path.name}): {proto.resume_text}")
+    if proto and proto.decision == "Отложено":
+        if proto.review_date:
+            overdue = ""
+            rd = _parse_date(proto.review_date)
+            if rd and rd < date.today():
+                overdue = " — 🔴 срок истёк, решение за РП"
+            print(f"Пересмотр «Отложено»: {proto.review_date}{overdue}")
+        if proto.resume_text:
+            print(f"Возобновление (из {proto.path.name}): {proto.resume_text}")
 
     print("Следующий шаг:")
     for s in next_step(state):
@@ -516,6 +554,11 @@ def check_gate_1_2(state: TaskState, out: List[Finding]) -> None:
     no_check = [c[0] for c in brief.criteria if not c[2]]
     if no_check:
         out.append(Finding("WARN", gate, f"критерии успеха без «Как проверим»: {fmt_nums(no_check)}"))
+    comparative = comparative_without_baseline(brief.criteria)
+    if comparative:
+        out.append(Finding("WARN", gate,
+                           f"сравнительные критерии без базлайна «до» в «Как проверим»: {fmt_nums(comparative)} — "
+                           f"состояние «до» после разработки не повторить (1c-planning)"))
     if not brief.confirm_section_found:
         out.append(Finding("ERR", gate, "в 01 нет секции «Подтверждение инициатора» (DoD-гейт)"))
     elif brief.confirm_unchecked:
@@ -595,6 +638,15 @@ def check_gate_5_6(state: TaskState, out: List[Finding]) -> None:
         out.append(Finding("INFO", gate,
                            f"легальная пауза конвейера ({proto.path.name}) — переход на Релиз запрещён до возобновления "
                            f"(протокол .r{proto.round + 1})"))
+        if not proto.review_date:
+            out.append(Finding("WARN", gate,
+                               "«Отложено» без даты пересмотра — пауза вне контроля (правило 1c-external-acceptance)"))
+        else:
+            rd = _parse_date(proto.review_date)
+            if rd and rd < date.today():
+                out.append(Finding("WARN", gate,
+                                   f"срок пересмотра «Отложено» истёк ({proto.review_date}) — РП решает судьбу задачи "
+                                   f"и черновика релиза (расконсервация / возврат в бэклог / закрытие)"))
     elif d == "Возврат":
         out.append(Finding("ERR", gate, "решение «Возврат» — гейт не пройден"))
         if not state.rework_list:
