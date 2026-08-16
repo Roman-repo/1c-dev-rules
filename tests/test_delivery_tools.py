@@ -113,6 +113,10 @@ class TestMarkdownHelpers(unittest.TestCase):
             absent.write_text(base, encoding="utf-8")
             self.assertFalse(dt.parse_brief(absent).retrospective_filled)
 
+    def test_repeated_failures_across_rounds(self):
+        state = dt.load_state(FIXTURES / "rework" / "TASK-R1")
+        self.assertEqual(dt.repeated_failures(state.protocols), {"1": [0, 1]})
+
     def test_status_counts_dual_static_and_deferred(self):
         m = dt.Matrix(rows=[dt.MatrixRow("1", "к", "1", "о", "п", "✅ статич. (05) / ⏳ интерактивно")])
         c = m.status_counts()
@@ -188,6 +192,16 @@ class TestStatusCommand(unittest.TestCase):
             code, out = run_cli("status", Path(tmp))
         self.assertEqual(code, 1)
         self.assertIn("не найден 01-task-brief.md", out)
+
+    def test_rework_repeated_failure_demands_automation(self):
+        code, out = run_cli("status", FIXTURES / "rework" / "TASK-R1")
+        self.assertEqual(code, 0)
+        self.assertIn("Дважды ❌ у приёмщика: критерий 1 (раунды 0, 1)", out)
+        self.assertIn("автоматизация unit/BDD обязательна", out)
+        code, out = run_cli("check", FIXTURES / "rework" / "TASK-R1")
+        self.assertEqual(code, 1)   # «Возврат» — задача в цикле правки
+        self.assertIn("критерий 1 упал ❌ в раундах (0, 1)", out)
+        self.assertIn("unit/BDD-тестом, а не ручной проверкой", out)
 
 
 class TestCheckCommand(unittest.TestCase):
