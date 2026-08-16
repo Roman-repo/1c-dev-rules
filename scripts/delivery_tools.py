@@ -293,6 +293,7 @@ class Protocol:
     resume_text: str = ""         # абзац «Возобновление приёмки» (при «Отложено»)
     review_date: Optional[str] = None  # дата пересмотра «Отложено» (1c-external-acceptance)
     remark_classes: List[str] = field(default_factory=list)
+    failed_criteria: List[str] = field(default_factory=list)  # № критериев со статусом приёмщика ❌
 
 
 def parse_protocol(path: Path) -> Protocol:
@@ -327,6 +328,14 @@ def parse_protocol(path: Path) -> Protocol:
             c = cell(r, i_class).upper()
             if c in ("A", "B", "C", "D"):
                 proto.remark_classes.append(c)
+    results = find_section(sections, "Результаты по критериям")
+    if results:
+        headers, rows = table_rows(results)
+        i_num = col_index(headers, "№")
+        i_status = col_index(headers, "Статус приёмщика")
+        for r in rows:
+            if "❌" in cell(r, i_status):
+                proto.failed_criteria.append(cell(r, i_num))
     return proto
 
 
@@ -334,6 +343,15 @@ def find_protocols(task_dir: Path) -> List[Protocol]:
     """Все раунды протокола, упорядочены по номеру (последний — актуальный)."""
     protos = [parse_protocol(p) for p in sorted(task_dir.glob(PROTOCOL_GLOB))]
     return sorted(protos, key=lambda p: p.round)
+
+
+def repeated_failures(protocols: List[Protocol]) -> Dict[str, List[int]]:
+    """Критерии, упавшие ❌ у приёмщика, с номерами раундов: {№: [раунды]}."""
+    out: Dict[str, List[int]] = {}
+    for p in protocols:
+        for num in p.failed_criteria:
+            out.setdefault(num, []).append(p.round)
+    return out
 
 
 @dataclass
@@ -514,6 +532,10 @@ def cmd_status(task_dir: Path) -> int:
         red = "🔴 " + "; ".join(state.internal.red_rows) if state.internal.red_rows else "нет"
         static = ", статический режим" if state.internal.static_mode else ""
         print(f"Отчёт 05: красные строки — {red}{static}")
+    repeated = {n: rs for n, rs in repeated_failures(state.protocols).items() if len(rs) >= 2}
+    if repeated:
+        details = "; ".join(f"критерий {n} (раунды {', '.join(map(str, rs))})" for n, rs in sorted(repeated.items()))
+        print(f"Дважды ❌ у приёмщика: {details} — автоматизация unit/BDD обязательна")
     if state.releases:
         for r in state.releases:
             kind = "ЧЕРНОВИК" if r.is_draft else "боевой"
@@ -660,6 +682,21 @@ def check_gate_5_6(state: TaskState, out: List[Finding]) -> None:
             out.append(Finding("INFO", gate, f"лист возврата 06a есть; классы замечаний: {proto.remark_classes or '?'}"))
     else:
         out.append(Finding("INFO", gate, f"решение «{d}» ({proto.date or 'дата не указана'}) — гейт пройден"))
+    # Дважды упавший критерий — обязательная автоматизация (rework-rules):
+    # ручная проверка дважды пропустила одно и то же, третья попытка бессмысленна.
+    matrix_by_num = {r.num: r for r in state.matrix.rows} if state.matrix else {}
+    for num, rounds in sorted(repeated_failures(state.protocols).items()):
+        if len(rounds) < 2:
+            continue
+        rounds_str = ", ".join(str(x) for x in rounds)
+        row = matrix_by_num.get(num)
+        if row is not None and re.search(r"unit|bdd", row.check, re.I):
+            out.append(Finding("INFO", gate,
+                               f"критерий {num} упал ❌ в раундах ({rounds_str}) — проверка переведена на unit/BDD"))
+        else:
+            out.append(Finding("WARN", gate,
+                               f"критерий {num} упал ❌ в раундах ({rounds_str}) — следующая итерация закрывает его "
+                               f"unit/BDD-тестом, а не ручной проверкой (rework-rules)"))
 
 
 def check_gate_6(state: TaskState, out: List[Finding]) -> None:
