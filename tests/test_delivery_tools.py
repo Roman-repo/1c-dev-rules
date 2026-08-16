@@ -99,6 +99,20 @@ class TestMarkdownHelpers(unittest.TestCase):
         ]
         self.assertEqual(dt.comparative_without_baseline(criteria), ["2"])
 
+    def test_brief_retrospective_detection(self):
+        """Ретроспектива 01 заполнена = секция есть и без заглушек «<…>»."""
+        with tempfile.TemporaryDirectory() as tmp:
+            base = "# Карточка задачи — T: X\n\n## Критерии успеха\n\n| № | Критерий | Как проверим |\n|---|---|---|\n| 1 | к | п |\n"
+            filled = Path(tmp) / "filled.md"
+            filled.write_text(base + "\n## Ретроспектива\n\n| Оценка / факт | S / S — попадание |\n|---|---|\n", encoding="utf-8")
+            self.assertTrue(dt.parse_brief(filled).retrospective_filled)
+            stub = Path(tmp) / "stub.md"
+            stub.write_text(base + "\n## Ретроспектива\n\n| Оценка / факт | <S> / <S / M / L> — <причина> |\n|---|---|\n", encoding="utf-8")
+            self.assertFalse(dt.parse_brief(stub).retrospective_filled)
+            absent = Path(tmp) / "absent.md"
+            absent.write_text(base, encoding="utf-8")
+            self.assertFalse(dt.parse_brief(absent).retrospective_filled)
+
     def test_status_counts_dual_static_and_deferred(self):
         m = dt.Matrix(rows=[dt.MatrixRow("1", "к", "1", "о", "п", "✅ статич. (05) / ⏳ интерактивно")])
         c = m.status_counts()
@@ -190,6 +204,7 @@ class TestCheckCommand(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertIn("задача в составе", out)
         self.assertIn("ERR 0", out)
+        self.assertNotIn("ретроспектива 01 не заполнена", out)   # ретроспектива закрыта
 
     def test_broken_task_reports_every_gate(self):
         code, out = run_cli("check", FIXTURES / "broken" / "TASK-B1")

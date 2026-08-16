@@ -153,6 +153,7 @@ class Brief:
     confirm_checked: int = 0
     confirm_unchecked: int = 0
     confirm_section_found: bool = False
+    retrospective_filled: bool = False  # секция есть и без заглушек «<…>» — петля оценки закрыта
 
 
 def parse_brief(path: Path) -> Brief:
@@ -172,6 +173,8 @@ def parse_brief(path: Path) -> Brief:
     conf = find_section(sections, "Подтверждение инициатора")
     brief.confirm_section_found = conf is not None
     brief.confirm_checked, brief.confirm_unchecked = checkboxes(conf)
+    retro = find_section(sections, "Ретроспектив")
+    brief.retrospective_filled = bool(retro) and "<" not in retro
     return brief
 
 
@@ -461,6 +464,8 @@ def next_step(state: TaskState) -> List[str]:
                     steps.append("принято — задача в релизе (этап 6 закрыт по артефактам)")
             else:
                 steps.append("принято — этап 6 Релиз (1c-release): включить задачу в состав релиза")
+            if state.brief and not state.brief.retrospective_filled and any(not r.is_draft for r in state.releases):
+                steps.append("заполнить ретроспективу 01 (оценка/факт, возвраты, вывод) — закрытие задачи")
     return steps
 
 
@@ -681,6 +686,10 @@ def check_gate_6(state: TaskState, out: List[Finding]) -> None:
                 out.append(Finding("WARN", gate, f"{label}: задача упомянута, но отсутствует в «Задачи в составе»"))
             else:
                 out.append(Finding("INFO", gate, f"{label}: задача в составе, протокол — {r.protocol_ref or 'ссылка не распознана'}"))
+                if state.brief and not state.brief.retrospective_filled:
+                    out.append(Finding("WARN", gate,
+                                       "ретроспектива 01 не заполнена (оценка/факт, возвраты, вывод) — "
+                                       "петля оценки не закрыта (DoD «6 → закрытие»)"))
 
 
 def cmd_check(task_dir: Path) -> int:
