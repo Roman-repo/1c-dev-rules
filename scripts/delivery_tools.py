@@ -14,9 +14,11 @@ delivery_tools.py — состояние задачи конвейера раз�
 Использование (аргумент — каталог задачи, обычно docs/delivery/<ID-задачи>):
     python3 scripts/delivery_tools.py status <каталог-задачи>   # сводка состояния
     python3 scripts/delivery_tools.py check  <каталог-задачи>   # прогон DoD-гейтов
+    python3 scripts/delivery_tools.py roadmap <каталог-доставки>  # все задачи и эпики
 
 Выход: check — 0 нет ERR (WARN допустимы), 1 есть ERR. status — всегда 0
-(1 только если каталог не похож на задачу конвейера).
+(1 только если каталог не похож на задачу конвейера). roadmap — 0 если найден
+хотя бы один эпик или задача (1 — пустой/чужой каталог, 2 — каталог не найден).
 
 Без зависимостей: только стандартная библиотека.
 """
@@ -40,6 +42,7 @@ ARTIFACTS = {
 }
 PROTOCOL_GLOB = "06-acceptance-protocol*.md"
 REWORK_LIST = "06a-rework-list.md"
+EPIC_CARD = "00-epic-brief.md"
 
 STAGES = [
     "Планирование", "Проектирование", "Разработка",
@@ -149,6 +152,7 @@ def read_text(path: Path) -> str:
 class Brief:
     task_id: str = ""
     name: str = ""
+    epic: str = ""                                              # ID эпика из поля «Эпик» (если задача в эпике)
     criteria: List[Tuple[str, str, str]] = field(default_factory=list)  # (№, критерий, как проверим)
     confirm_checked: int = 0
     confirm_unchecked: int = 0
@@ -158,10 +162,14 @@ class Brief:
 
 def parse_brief(path: Path) -> Brief:
     brief = Brief()
-    sections = md_sections(read_text(path))
-    m = re.match(r"#\s*Карточка задачи\s*—\s*(.+?):\s*(.+)", read_text(path).splitlines()[0])
+    text = read_text(path)
+    sections = md_sections(text)
+    m = re.match(r"#\s*Карточка задачи\s*—\s*(.+?):\s*(.+)", text.splitlines()[0])
     if m:
         brief.task_id, brief.name = m.group(1).strip(), m.group(2).strip()
+    m = re.search(r"\*\*Эпик:\*\*\s*([A-Za-z0-9_\-]+)", text)
+    if m and not m.group(1).startswith("<"):
+        brief.epic = m.group(1)
     crit_sec = find_section(sections, "Критерии успеха")
     if crit_sec:
         headers, rows = table_rows(crit_sec)
@@ -487,6 +495,19 @@ def next_step(state: TaskState) -> List[str]:
     return steps
 
 
+def stage_reached(state: TaskState) -> int:
+    """Номер достигнутого этапа: самый поздний существующий артефакт + решение
+    протокола. Артефакт N принадлежит этапу N (01→1 … 05→4), протокол — этапу 5;
+    «принято» открывает этап 6 «Релиз». 0 — артефактов нет."""
+    reached = max((n for n in ARTIFACTS if (state.task_dir / ARTIFACTS[n]).is_file()), default=0)
+    proto = state.latest_protocol
+    if proto:
+        reached = 5
+        if proto.decision in ("Принято", "Принято с замечаниями"):
+            reached = 6
+    return reached
+
+
 def cmd_status(task_dir: Path) -> int:
     state = load_state(task_dir)
     brief = state.brief
@@ -494,6 +515,8 @@ def cmd_status(task_dir: Path) -> int:
         print(f"❌ {task_dir}: не найден 01-task-brief.md — это каталог задачи конвейера?")
         return 1
     print(f"Задача: {brief.task_id} — {brief.name}")
+    if brief.epic:
+        print(f"Эпик: {brief.epic}")
     print(f"Каталог: {task_dir}")
 
     arts = " ".join(
@@ -507,16 +530,12 @@ def cmd_status(task_dir: Path) -> int:
     rework = "✓" if state.rework_list else "—"
     print(f"Артефакты: {arts} | 06: {proto_desc} | 06a: {rework}")
 
-    # Этап: самый поздний существующий артефакт + решение протокола.
-    # Артефакт N принадлежит этапу N (01→1 … 05→4), протокол — этапу 5;
-    # «принято» открывает этап 6 «Релиз».
-    reached = max((n for n in ARTIFACTS if (task_dir / ARTIFACTS[n]).is_file()), default=0)
-    if proto:
-        reached = 5
-        if proto.decision in ("Принято", "Принято с замечаниями"):
-            reached = 6
-    stage = STAGES[reached - 1]
-    line = f"Этап: {reached} «{stage}»"
+    # Этап: самый поздний существующий артефакт + решение протокола
+    # (см. stage_reached).
+    reached = stage_reached(state)
+    proto = state.latest_protocol
+    stage = STAGES[reached - 1] if reached else "—"
+    line = f"Этап: {reached} «{stage}»" if reached else "Этап: — (артефактов нет)"
     if proto and proto.decision:
         line += f" — решение «{proto.decision}»" + (f", {proto.date}" if proto.date else "")
     print(line)
@@ -557,6 +576,73 @@ def cmd_status(task_dir: Path) -> int:
     print("Следующий шаг:")
     for s in next_step(state):
         print(f"  • {s}")
+    return 0
+
+
+# --- сводка каталога доставки (roadmap) --------------------------------------
+
+def parse_epic_card(path: Path) -> Tuple[str, str]:
+    """Карточка эпика → (ID, наименование) из заголовка «# Карточка эпика — ID: имя»."""
+    m = re.match(r"#\s*Карточка эпика\s*—\s*(.+?):\s*(.+)", read_text(path).splitlines()[0])
+    if m:
+        return m.group(1).strip(), m.group(2).strip()
+    return path.parent.name, ""
+
+
+def cmd_roadmap(delivery_root: Path) -> int:
+    """Сводка всех задач и эпиков каталога доставки: статусы вместо памяти.
+
+    Задача — подкаталог с 01-task-brief.md; эпик — подкаталог с 00-epic-brief.md
+    (уровень над конвейером, 1c-epic-planning). Каталоги с «_» (например,
+    _releases) пропускаются.
+    """
+    if not delivery_root.is_dir():
+        print(f"❌ каталог не найден: {delivery_root}")
+        return 2
+    task_dirs: List[Path] = []
+    epics: Dict[str, str] = {}
+    for d in sorted(delivery_root.iterdir()):
+        if not d.is_dir() or d.name.startswith("_"):
+            continue
+        if (d / EPIC_CARD).is_file():
+            epic_id, epic_name = parse_epic_card(d / EPIC_CARD)
+            epics[epic_id] = epic_name
+        elif (d / ARTIFACTS[1]).is_file():
+            task_dirs.append(d)
+    if not task_dirs and not epics:
+        print(f"❌ {delivery_root}: нет ни задач (01-task-brief.md), ни эпиков (00-epic-brief.md)")
+        return 1
+
+    print(f"Каталог доставки: {delivery_root}")
+    tasks_by_epic: Dict[str, List[str]] = {}
+    for epic_id, epic_name in epics.items():
+        print(f"Эпик {epic_id} — {epic_name or '(имя не распознано)'}")
+    print(f"Задач: {len(task_dirs)}" + (f", эпиков: {len(epics)}" if epics else "") + "\n")
+    print("| Задача | Наименование | Эпик | Этап | Решение 06 | ✅/⏳/❌ |")
+    print("|---|---|---|---|---|---|")
+    for d in task_dirs:
+        state = load_state(d)
+        brief = state.brief
+        task_id = brief.task_id if brief else d.name
+        name = (brief.name if brief else "") or "(карточка не читается)"
+        if len(name) > 48:
+            name = name[:47] + "…"
+        epic = brief.epic if brief else ""
+        if epic:
+            tasks_by_epic.setdefault(epic, []).append(task_id)
+        reached = stage_reached(state)
+        stage = f"{reached} {STAGES[reached - 1]}" if reached else "—"
+        proto = state.latest_protocol
+        decision = (proto.decision or "—") if proto else "—"
+        counts = state.matrix.status_counts() if state.matrix else None
+        crit = (f"{len(counts['ok'])}/{len(counts['deferred'])}/{len(counts['red'])}"
+                if counts and state.matrix and state.matrix.rows else "—")
+        print(f"| {task_id} | {name} | {epic or '—'} | {stage} | {decision} | {crit} |")
+
+    # задачи ссылаются на эпик, карточки которого нет в каталоге, — сигнал рассинхрона
+    orphan_epics = sorted(e for e in tasks_by_epic if e not in epics) if tasks_by_epic else []
+    for e in orphan_epics:
+        print(f"\n🟡 задач с полем «Эпик: {e}»: {len(tasks_by_epic[e])}, но карточка эпика {e} не найдена в этом каталоге")
     return 0
 
 
@@ -762,15 +848,19 @@ def cmd_check(task_dir: Path) -> int:
 USAGE = """Использование:
   python3 scripts/delivery_tools.py status <каталог-задачи>
   python3 scripts/delivery_tools.py check  <каталог-задачи>
+  python3 scripts/delivery_tools.py roadmap <каталог-доставки>
 
-status — сводка состояния задачи по артефактам 01–06 (этап, статусы матрицы,
-         красные строки, решение протокола, релиз, следующий шаг).
-check  — механическая проверка DoD-гейтов (exit 1 при ERR). Каталог задачи —
-         обычно docs/delivery/<ID-задачи> проекта."""
+status  — сводка состояния задачи по артефактам 01–06 (этап, статусы матрицы,
+          красные строки, решение протокола, релиз, следующий шаг).
+check   — механическая проверка DoD-гейтов (exit 1 при ERR). Каталог задачи —
+          обычно docs/delivery/<ID-задачи> проекта.
+roadmap — сводка всех задач и эпиков каталога доставки (обычно docs/delivery):
+          этап конвейера и решение протокола каждой задачи, связь с эпиками
+          (1c-epic-planning). Статусы вместо памяти."""
 
 
 def main(argv: List[str]) -> int:
-    if len(argv) != 3 or argv[1] not in ("status", "check"):
+    if len(argv) != 3 or argv[1] not in ("status", "check", "roadmap"):
         print(USAGE)
         return 2
     task_dir = Path(argv[2])
@@ -779,6 +869,8 @@ def main(argv: List[str]) -> int:
         return 2
     if argv[1] == "status":
         return cmd_status(task_dir)
+    if argv[1] == "roadmap":
+        return cmd_roadmap(task_dir)
     return cmd_check(task_dir)
 
 

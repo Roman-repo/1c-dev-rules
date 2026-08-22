@@ -187,6 +187,14 @@ class TestStatusCommand(unittest.TestCase):
         self.assertIn('1 «Планирование»', out)
         self.assertIn("02-execution-scenario.md", out)      # следующий шаг — проектирование
 
+    def test_status_shows_epic_link(self):
+        """Поле «Эпик» из 01 выводится в status и парсится в Brief."""
+        code, out = run_cli("status", FIXTURES / "roadmap" / "TASK-R1")
+        self.assertEqual(code, 0)
+        self.assertIn("Эпик: EP-001", out)
+        brief = dt.parse_brief(FIXTURES / "roadmap" / "TASK-R1" / "01-task-brief.md")
+        self.assertEqual(brief.epic, "EP-001")
+
     def test_not_a_task_dir(self):
         with tempfile.TemporaryDirectory() as tmp:
             code, out = run_cli("status", Path(tmp))
@@ -202,6 +210,46 @@ class TestStatusCommand(unittest.TestCase):
         self.assertEqual(code, 1)   # «Возврат» — задача в цикле правки
         self.assertIn("критерий 1 упал ❌ в раундах (0, 1)", out)
         self.assertIn("unit/BDD-тестом, а не ручной проверкой", out)
+
+
+class TestRoadmapCommand(unittest.TestCase):
+    def test_roadmap_lists_epic_and_task_stages(self):
+        """Сводка каталога доставки: эпик, задачи с этапами конвейера, связь через поле «Эпик»."""
+        code, out = run_cli("roadmap", FIXTURES / "roadmap")
+        self.assertEqual(code, 0)
+        self.assertIn("Задач: 2, эпиков: 1", out)
+        self.assertIn("Эпик EP-001 — Внедрить согласование заявок на ремонт", out)
+        self.assertIn("| TASK-R1 |", out)
+        self.assertIn("| 1 Планирование |", out)
+        self.assertIn("| TASK-R2 |", out)
+        self.assertIn("| 2 Проектирование |", out)
+        self.assertIn("| EP-001 |", out)                     # колонка «Эпик» у обеих задач
+        self.assertNotIn("карточка эпика EP-001 не найдена", out)
+
+    def test_roadmap_skips_releases_and_requires_tasks(self):
+        """_releases не считается задачей; пустой каталог — код 1."""
+        code, out = run_cli("roadmap", FIXTURES / "deferred")   # только TASK-D1 + _releases
+        self.assertEqual(code, 0)
+        self.assertIn("TASK-D1", out)
+        self.assertEqual(out.count("| TASK-"), 1)
+        with tempfile.TemporaryDirectory() as tmp:
+            code, out = run_cli("roadmap", Path(tmp))
+        self.assertEqual(code, 1)
+        self.assertIn("нет ни задач", out)
+
+    def test_roadmap_orphan_epic_link(self):
+        """Задача ссылается на эпик без карточки в каталоге — сигнал рассинхрона."""
+        with tempfile.TemporaryDirectory() as tmp:
+            task = Path(tmp) / "TASK-X1"
+            task.mkdir()
+            (task / "01-task-brief.md").write_text(
+                "# Карточка задачи — TASK-X1: Сделать что-то\n\n- **Эпик:** EP-999\n",
+                encoding="utf-8",
+            )
+            code, out = run_cli("roadmap", Path(tmp))
+        self.assertEqual(code, 0)
+        self.assertIn("EP-999", out)
+        self.assertIn("карточка эпика EP-999 не найдена", out)
 
 
 class TestCheckCommand(unittest.TestCase):
