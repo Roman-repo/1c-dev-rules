@@ -103,20 +103,34 @@ def find_section(sections: Dict[str, str], *keywords: str) -> Optional[str]:
     return None
 
 
-def table_rows(section_text: str) -> Tuple[List[str], List[List[str]]]:
-    """Таблица секции → (заголовки, строки-ячейки). Строки-разделители пропущены."""
-    rows: List[List[str]] = []
+def split_tables(section_text: str) -> List[Tuple[List[str], List[List[str]]]]:
+    """Все таблицы секции → список (заголовки, строки-ячейки).
+
+    Блоки pipe-строк разделяются любой непустой непipe-строкой (заголовок
+    «### Алфавит статусов», текст между таблицами). Строки-разделители
+    пропускаются. Нужно, чтобы таблицы-легенды внутри секции «Матрица…»
+    не попадали в парсинг критериев (ложные пустые ячейки, 0.17.1)."""
+    tables: List[Tuple[List[str], List[List[str]]]] = []
+    block: List[List[str]] = []
     for line in section_text.splitlines():
         s = line.strip()
-        if not s.startswith("|"):
-            continue
-        cells = [c.strip() for c in s.strip("|").split("|")]
-        if cells and all(SEP_CELL_RE.match(c) for c in cells if c != ""):
-            continue
-        rows.append(cells)
-    if not rows:
-        return [], []
-    return rows[0], rows[1:]
+        if s.startswith("|"):
+            cells = [c.strip() for c in s.strip("|").split("|")]
+            if cells and all(SEP_CELL_RE.match(c) for c in cells if c != ""):
+                continue
+            block.append(cells)
+        elif block:
+            tables.append((block[0], block[1:]))
+            block = []
+    if block:
+        tables.append((block[0], block[1:]))
+    return tables
+
+
+def table_rows(section_text: str) -> Tuple[List[str], List[List[str]]]:
+    """Первая таблица секции → (заголовки, строки-ячейки). Строки-разделители пропущены."""
+    tables = split_tables(section_text)
+    return tables[0] if tables else ([], [])
 
 
 def col_index(headers: List[str], *keywords: str) -> Optional[int]:
@@ -236,7 +250,15 @@ def parse_matrix(path: Path) -> Matrix:
     if sec is None:
         matrix.parse_error = "секция «Матрица трассировки и критерии приёмки» не найдена"
         return matrix
-    headers, rows = table_rows(sec)
+    # только таблицы с колонкой «Критерий»: легенда «Алфавит статусов» внутри
+    # секции (### в шаблоне 0.13.0+) матрицей не является (0.17.1)
+    matrix_tables = [
+        (h, r) for h, r in split_tables(sec) if col_index(h, "Критерий") is not None
+    ]
+    if not matrix_tables:
+        matrix.parse_error = "таблица критериев (колонка «Критерий») в секции не найдена"
+        return matrix
+    headers, rows = matrix_tables[0]
     idx = {
         "num": col_index(headers, "№"), "criterion": col_index(headers, "Критерий"),
         "step": col_index(headers, "Шаг"), "obj": col_index(headers, "Объект"),

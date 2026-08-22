@@ -138,6 +138,30 @@ class TestMarkdownHelpers(unittest.TestCase):
         self.assertEqual(c["red"], ["1"])
         self.assertEqual(c["ok"], [])
 
+    def test_matrix_legend_table_ignored(self):
+        """0.17.1: легенда «Алфавит статусов» внутри секции «Матрица…» (формат
+        шаблона 0.13.0+) не парсится как критерии — раньше давала ложные ERR
+        «пустая ячейка» на строках Пометка/☐/✅/... (TASK-002, отклонение №1)."""
+        with tempfile.TemporaryDirectory() as tmp:
+            p = Path(tmp) / "04-acceptance-criteria.md"
+            p.write_text(
+                "# К\n\n## Матрица трассировки и критерии приёмки\n\n"
+                "| № | Критерий (проверяемо) | Шаг сценария | Объект/код (03) | Проверка | Статус 05 | Статус 06 |\n"
+                "|---|---|---|---|---|---|---|\n"
+                "| 1 | критерий | 1 | форма | ручная | ☐ | ☐ |\n\n"
+                "### Алфавит статусов (обеих колонок)\n\n"
+                "| Пометка | Значение | Кто ставит |\n"
+                "|---|---|---|\n"
+                "| ☐ | не проверялся | — |\n"
+                "| ✅ | проверен живым прогоном | 05, 06 |\n\n"
+                "Правила заполнения: текст вне таблиц.\n",
+                encoding="utf-8",
+            )
+            m = dt.parse_matrix(p)
+        self.assertEqual([r.num for r in m.rows], ["1"])
+        self.assertEqual([r.criterion for r in m.rows], ["критерий"])
+        self.assertEqual(m.rows[0].empty_trace_cols(), [])
+
     def test_matrix_two_status_columns(self):
         """Формат 0.13.0: «Статус 05»/«Статус 06» собираются в один статус строки."""
         with tempfile.TemporaryDirectory() as tmp:
