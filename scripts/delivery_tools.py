@@ -43,6 +43,7 @@ ARTIFACTS = {
 PROTOCOL_GLOB = "06-acceptance-protocol*.md"
 REWORK_LIST = "06a-rework-list.md"
 EPIC_CARD = "00-epic-brief.md"
+MODE_FILE = "_conveyor-mode.md"          # режим согласования каталога доставки (manual/auto)
 
 STAGES = [
     "Планирование", "Проектирование", "Разработка",
@@ -50,6 +51,7 @@ STAGES = [
 ]
 
 DECISIONS = ("Принято с замечаниями", "Принято", "Возврат", "Отложено")
+APPROVAL_DECISIONS = ("Согласовано", "Доработать")  # штамп Оркестратора в 04 (гейт 2→3)
 
 # --- разбор markdown --------------------------------------------------------
 
@@ -222,6 +224,12 @@ class MatrixRow:
 class Matrix:
     rows: List[MatrixRow] = field(default_factory=list)
     parse_error: Optional[str] = None
+    # Согласование пакета 02/03/04 Оркестратором — секция в 04, гейт 2→3
+    approval_found: bool = False
+    approval_checked: List[str] = field(default_factory=list)
+    approval_decision: Optional[str] = None      # «Согласовано» / «Доработать»
+    approval_mode: str = ""                      # manual/auto из штампа (пусто — не указан)
+    approval_date: str = ""
 
     def status_counts(self) -> Dict[str, List[str]]:
         """Критерии по типу статуса: ok — прошедшие (✅ в 05 или 06; ❌ сильнее ✅),
@@ -246,6 +254,22 @@ class Matrix:
 def parse_matrix(path: Path) -> Matrix:
     matrix = Matrix()
     sections = md_sections(read_text(path))
+    # Штамп согласования разбираем до таблиц: он валиден независимо от ошибок
+    # разбора самой матрицы (секция отдельная, формат как у решений 06).
+    appr = find_section(sections, "Согласование", "Оркестратора")
+    if appr is not None:
+        matrix.approval_found = True
+        for decision in APPROVAL_DECISIONS:
+            if re.search(rf"^\s*-\s*\[[xX]\]\s*\*\*{re.escape(decision)}\*\*", appr, re.M):
+                matrix.approval_checked.append(decision)
+        if len(matrix.approval_checked) == 1:
+            matrix.approval_decision = matrix.approval_checked[0]
+        m = re.search(r"Режим[^:\n]*:\s*\*{0,2}\s*(manual|auto)", appr, re.I)
+        if m:
+            matrix.approval_mode = m.group(1).lower()
+        m = re.search(r"Дата[^:\n]*:\s*\*{0,2}\s*(\d{4}-\d{2}-\d{2}|\d{2}\.\d{2}\.\d{4})", appr)
+        if m:
+            matrix.approval_date = m.group(1)
     sec = find_section(sections, "Матрица")
     if sec is None:
         matrix.parse_error = "секция «Матрица трассировки и критерии приёмки» не найдена"
@@ -468,6 +492,17 @@ def fmt_nums(nums: List[str]) -> str:
     return joined if joined else "—"
 
 
+def read_conveyor_mode(task_dir: Path) -> str:
+    """Режим согласования каталога доставки: _conveyor-mode.md рядом с задачей.
+    Нет файла или строки mode: — manual (безопасный дефолт, 1c-delivery-gate §0)."""
+    mode_file = task_dir.parent / MODE_FILE
+    if mode_file.is_file():
+        m = re.search(r"^\s*mode:\s*(manual|auto)\s*$", read_text(mode_file), re.M | re.I)
+        if m:
+            return m.group(1).lower()
+    return "manual"
+
+
 def next_step(state: TaskState) -> List[str]:
     """Рекомендованные следующие шаги по лестнице состояний (эвристика, не решение)."""
     steps: List[str] = []
@@ -483,7 +518,13 @@ def next_step(state: TaskState) -> List[str]:
         if empties:
             steps.append(f"матрица 04: пустые ячейки трассировки у критериев {fmt_nums(empties)} (DoD 2→3)")
     if not (state.task_dir / ARTIFACTS[5]).is_file() and not missing_design:
-        steps.append("Разработка (1c-dispatch-gate) → внутренняя приёмка (артефакт 05)")
+        approved = state.matrix is not None and state.matrix.approval_decision == "Согласовано"
+        if state.matrix is not None and not approved:
+            mode = read_conveyor_mode(state.task_dir)
+            steps.append(f"согласование пакета 02/03/04 с Оркестратором (гейт 2→3, режим {mode}) — "
+                         f"штамп в 04; в manual код не начинается до решения")
+        else:
+            steps.append("Разработка (1c-dispatch-gate) → внутренняя приёмка (артефакт 05)")
     internal = state.internal
     if internal:
         if internal.red_rows:
@@ -569,6 +610,18 @@ def cmd_status(task_dir: Path) -> int:
               f"⏳ {len(c['deferred'])} ({fmt_nums(c['deferred'])}), "
               f"❌ {len(c['red'])} ({fmt_nums(c['red'])}), "
               f"☐ {len(c['todo'])} ({fmt_nums(c['todo'])})")
+    if state.matrix:
+        m = state.matrix
+        mode = read_conveyor_mode(task_dir)
+        if not m.approval_found:
+            print(f"Согласование 04: нет секции «Согласование Оркестратора» (гейт 2→3; режим каталога: {mode})")
+        elif m.approval_decision == "Согласовано":
+            stamp = m.approval_mode or mode
+            print(f"Согласование 04: ✅ Согласовано{f', {m.approval_date}' if m.approval_date else ''} (режим {stamp})")
+        elif m.approval_decision == "Доработать":
+            print("Согласование 04: ❌ Доработать — без кода до повторного согласования")
+        else:
+            print(f"Согласование 04: решение не отмечено (режим каталога: {mode})")
     if state.internal:
         red = "🔴 " + "; ".join(state.internal.red_rows) if state.internal.red_rows else "нет"
         static = ", статический режим" if state.internal.static_mode else ""
@@ -711,6 +764,31 @@ def check_gate_2_3(state: TaskState, out: List[Finding]) -> None:
     if missing:
         out.append(Finding("ERR", gate, f"матрица 04 есть, но отсутствуют {', '.join(missing)}"))
     matrix = state.matrix
+    # Согласование пакета 02/03/04 Оркестратором (1c-delivery-gate §0, 0.18.0).
+    # Отсутствие секции — WARN, не ERR: задачи, начатые до 0.18.0, прожиты без
+    # согласования, задним числом их не блокируем.
+    mode = read_conveyor_mode(state.task_dir)
+    dev_started = (state.task_dir / ARTIFACTS[5]).is_file() or bool(state.protocols)
+    if not matrix.approval_found:
+        out.append(Finding("WARN", gate,
+                           "в 04 нет секции «Согласование Оркестратора» (гейт 2→3) — "
+                           f"задача начата до 0.18.0 или согласование пропущено; режим каталога: {mode}"))
+    elif len(matrix.approval_checked) > 1:
+        out.append(Finding("ERR", gate, f"в 04 отмечено несколько решений согласования: {matrix.approval_checked}"))
+    elif matrix.approval_decision is None:
+        out.append(Finding("WARN", gate, "решение согласования в 04 не отмечено (Согласовано / Доработать)"))
+    elif matrix.approval_decision == "Согласовано":
+        if not matrix.approval_date:
+            out.append(Finding("WARN", gate, "согласование без даты в 04"))
+        else:
+            out.append(Finding("INFO", gate,
+                               f"пакет 02/03/04 согласован ({matrix.approval_date}, "
+                               f"режим {matrix.approval_mode or mode})"))
+    elif matrix.approval_decision == "Доработать":
+        if dev_started:
+            out.append(Finding("ERR", gate, "разработка начата при решении «Доработать» — возврат на согласование (без кода до штампа)"))
+        else:
+            out.append(Finding("WARN", gate, "пакет отправлен на доработку — без кода до повторного согласования"))
     if matrix.parse_error:
         out.append(Finding("ERR", gate, f"04: {matrix.parse_error}"))
         return
@@ -873,7 +951,8 @@ USAGE = """Использование:
   python3 scripts/delivery_tools.py roadmap <каталог-доставки>
 
 status  — сводка состояния задачи по артефактам 01–06 (этап, статусы матрицы,
-          красные строки, решение протокола, релиз, следующий шаг).
+          согласование Оркестратора, красные строки, решение протокола,
+          релиз, следующий шаг).
 check   — механическая проверка DoD-гейтов (exit 1 при ERR). Каталог задачи —
           обычно docs/delivery/<ID-задачи> проекта.
 roadmap — сводка всех задач и эпиков каталога доставки (обычно docs/delivery):
