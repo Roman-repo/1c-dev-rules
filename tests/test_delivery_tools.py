@@ -188,7 +188,7 @@ class TestStatusCommand(unittest.TestCase):
         code, out = run_cli("status", FIXTURES / "deferred" / "TASK-D1")
         self.assertEqual(code, 0)
         self.assertIn("TASK-D1", out)
-        self.assertIn('5 «Внешняя приёмка»', out)
+        self.assertIn('6 «Внешняя приёмка»', out)
         self.assertIn("Отложено", out)
         self.assertIn("статич. 3", out)          # все три критерия — статич. + ⏳
         self.assertIn("1.0.0-draft", out)
@@ -201,7 +201,7 @@ class TestStatusCommand(unittest.TestCase):
     def test_accepted_reaches_release_stage(self):
         code, out = run_cli("status", FIXTURES / "accepted" / "TASK-A1")
         self.assertEqual(code, 0)
-        self.assertIn('6 «Релиз»', out)
+        self.assertIn('7 «Релиз»', out)
         self.assertIn("Принято", out)
         self.assertIn("1.0.0", out)
 
@@ -318,10 +318,11 @@ class TestCheckCommand(unittest.TestCase):
 
 
 class TestOrchestratorApproval(unittest.TestCase):
-    """Гейт 2→3 (0.18.0): согласование пакета 02/03/04 Оркестратором.
+    """Этап 3 «Согласование» (0.19.0): решение Оркестратора по пакету 02/03/04.
 
-    Секция «Согласование Оркестратора» в 04. Отсутствие секции — WARN, не ERR
-    (задачи, начатые до 0.18.0, прожиты без согласования). «Доработать» при
+    Основной источник — артефакт 04a «Лист замечаний»; штамп в секции 04 —
+    legacy-формат 0.18.0 (фолбэк при отсутствии 04a). Отсутствие согласования —
+    WARN, не ERR (задачи, начатые до введения этапа). «Доработать» при
     начатой разработке — ERR. Режим каталога — _conveyor-mode.md (нет файла =
     manual)."""
 
@@ -336,21 +337,29 @@ class TestOrchestratorApproval(unittest.TestCase):
         "|---|---|---|---|---|---|---|\n"
         "| 1 | критерий | 1 | форма | ручная | ☐ | ☐ |\n\n"
     )
-    APPROVAL_OK = (
+    REVIEW_OK = (
+        "# Лист замечаний согласования — TASK-T1\n\n"
+        "## Решение\n\n"
+        "- [x] **Согласовано** — пакет принят\n"
+        "- [ ] **Доработать** — замечания\n\n"
+        "**Режим согласования:** manual\n**Дата:** 2026-08-23\n"
+    )
+    REVIEW_REWORK = (
+        "# Лист замечаний согласования — TASK-T1\n\n"
+        "## Решение\n\n"
+        "- [ ] **Согласовано** — пакет принят\n"
+        "- [x] **Доработать** — замечания\n\n"
+        "**Режим согласования:** manual\n**Дата:** 2026-08-23\n"
+    )
+    LEGACY_STAMP_OK = (
         "## Согласование Оркестратора\n\n"
         "- [x] **Согласовано** — пакет принят\n"
         "- [ ] **Доработать** — замечания\n\n"
         "**Режим согласования:** manual\n**Дата:** 2026-08-23\n"
     )
-    APPROVAL_REWORK = (
-        "## Согласование Оркестратора\n\n"
-        "- [ ] **Согласовано** — пакет принят\n"
-        "- [x] **Доработать** — замечания\n\n"
-        "**Режим согласования:** manual\n**Дата:** 2026-08-23\n"
-    )
 
-    def make_task(self, tmp: str, approval: str, with_internal: bool = False,
-                  mode: str = None) -> Path:
+    def make_task(self, tmp: str, review: str = "", legacy_stamp: str = "",
+                  with_internal: bool = False, mode: str = None) -> Path:
         root = Path(tmp) / "delivery"
         task = root / "TASK-T1"
         task.mkdir(parents=True)
@@ -358,7 +367,9 @@ class TestOrchestratorApproval(unittest.TestCase):
         (task / "02-execution-scenario.md").write_text("# С\n", encoding="utf-8")
         (task / "03-change-spec.md").write_text("# Сп\n", encoding="utf-8")
         (task / "04-acceptance-criteria.md").write_text(
-            "# К\n\n" + self.MATRIX + approval, encoding="utf-8")
+            "# К\n\n" + self.MATRIX + legacy_stamp, encoding="utf-8")
+        if review:
+            (task / "04a-design-review.md").write_text(review, encoding="utf-8")
         if with_internal:
             (task / "05-internal-acceptance.md").write_text("# П\n", encoding="utf-8")
         if mode is not None:
@@ -366,68 +377,83 @@ class TestOrchestratorApproval(unittest.TestCase):
                 f"<!-- Режим конвейера -->\nmode: {mode}\nupdated: 2026-08-23\n", encoding="utf-8")
         return task
 
-    def test_approved_stamp_passes_gate(self):
+    def test_approved_review_passes_gate(self):
         with tempfile.TemporaryDirectory() as tmp:
-            task = self.make_task(tmp, self.APPROVAL_OK)
+            task = self.make_task(tmp, self.REVIEW_OK)
             code, out = run_cli("check", task)
             self.assertEqual(code, 0)
-            self.assertIn("пакет 02/03/04 согласован (2026-08-23, режим manual)", out)
-            self.assertNotIn("нет секции «Согласование Оркестратора»", out)
+            self.assertIn("пакет 02/03/04 согласован (2026-08-23, режим manual; 04a)", out)
+            self.assertIn("ERR 0", out)
             code, out = run_cli("status", task)
-        self.assertEqual(code, 0)
-        self.assertIn("Согласование 04: ✅ Согласовано, 2026-08-23 (режим manual)", out)
-        self.assertIn("Разработка (1c-dispatch-gate)", out)      # следующий шаг — код
+            self.assertEqual(code, 0)
+            self.assertIn("Согласование: ✅ Согласовано, 2026-08-23 (режим manual; 04a)", out)
+            self.assertIn('3 «Согласование»', out)                             # этап по 04a
+            self.assertIn("Разработка (1c-dispatch-gate)", out)                 # следующий шаг — код
 
-    def test_missing_section_is_warn_not_err(self):
-        """Задачи до 0.18.0: секции нет — WARN, конвейер не блокируется."""
+    def test_missing_review_is_warn_not_err(self):
+        """Задачи до 0.19.0: ни 04a, ни штампа — WARN, конвейер не блокируется."""
         with tempfile.TemporaryDirectory() as tmp:
-            task = self.make_task(tmp, approval="", with_internal=True)
+            task = self.make_task(tmp, with_internal=True)
             code, out = run_cli("check", task)
         self.assertEqual(code, 0)
-        self.assertIn("нет секции «Согласование Оркестратора»", out)
+        self.assertIn("нет согласования пакета 02/03/04", out)
         self.assertIn("ERR 0", out)
 
     def test_unapproved_package_blocks_dev_next_step(self):
-        """04 есть, согласования нет → следующий шаг — согласование, не разработка."""
+        """Пакет есть, согласования нет → следующий шаг — согласование, не разработка."""
         with tempfile.TemporaryDirectory() as tmp:
-            task = self.make_task(tmp, approval="")
+            task = self.make_task(tmp)
             code, out = run_cli("status", task)
         self.assertEqual(code, 0)
-        self.assertIn("согласование пакета 02/03/04 с Оркестратором (гейт 2→3, режим manual)", out)
+        self.assertIn("этап 3 Согласование (режим manual): предъявить пакет 02/03/04 Оркестратору", out)
         self.assertNotIn("Разработка (1c-dispatch-gate)", out)
 
     def test_rework_decision_with_dev_started_is_err(self):
         with tempfile.TemporaryDirectory() as tmp:
-            task = self.make_task(tmp, self.APPROVAL_REWORK, with_internal=True)
+            task = self.make_task(tmp, self.REVIEW_REWORK, with_internal=True)
             code, out = run_cli("check", task)
         self.assertEqual(code, 1)
         self.assertIn("разработка начата при решении «Доработать»", out)
         with tempfile.TemporaryDirectory() as tmp:
-            task = self.make_task(tmp, self.APPROVAL_REWORK)      # кода ещё нет
+            task = self.make_task(tmp, self.REVIEW_REWORK)      # кода ещё нет
             code, out = run_cli("check", task)
         self.assertEqual(code, 0)
         self.assertIn("без кода до повторного согласования", out)
 
-    def test_mode_file_overrides_default(self):
-        """_conveyor-mode.md: auto меняет режим в выводе; нет файла / мусор — manual."""
+    def test_legacy_stamp_in_04_is_fallback(self):
+        """Штамп 0.18.0 в секции 04 читается, когда 04a нет; 04a сильнее."""
         with tempfile.TemporaryDirectory() as tmp:
-            task = self.make_task(tmp, self.APPROVAL_OK.replace("**Режим согласования:** manual\n", ""), mode="auto")
-            state = dt.load_state(task)
-            self.assertEqual(dt.read_conveyor_mode(task), "auto")
+            task = self.make_task(tmp, legacy_stamp=self.LEGACY_STAMP_OK)
+            code, out = run_cli("check", task)
+            self.assertEqual(code, 0)
+            self.assertIn("04 (0.18.0)", out)                   # источник — legacy
             code, out = run_cli("status", task)
-            self.assertIn("(режим auto)", out)                     # режим из файла, в штампе не указан
+            self.assertIn("Разработка (1c-dispatch-gate)", out)
         with tempfile.TemporaryDirectory() as tmp:
-            task = self.make_task(tmp, self.APPROVAL_OK)
-            self.assertEqual(dt.read_conveyor_mode(task), "manual")  # дефолт без файла
-
-    def test_auto_stamp_mode_in_section(self):
-        """Штамп «режим auto» в секции важнее режима каталога (задача согласована в auto)."""
-        approval_auto = self.APPROVAL_OK.replace("manual", "auto")
-        with tempfile.TemporaryDirectory() as tmp:
-            task = self.make_task(tmp, approval_auto, mode="manual")
+            task = self.make_task(tmp, review=self.REVIEW_REWORK, legacy_stamp=self.LEGACY_STAMP_OK)
             code, out = run_cli("check", task)
         self.assertEqual(code, 0)
-        self.assertIn("пакет 02/03/04 согласован (2026-08-23, режим auto)", out)
+        self.assertIn("без кода до повторного согласования", out)  # 04a («Доработать») перекрыл штамп в 04
+
+    def test_mode_file_overrides_default(self):
+        """_conveyor-mode.md: auto меняет режим в выводе; нет файла — manual."""
+        with tempfile.TemporaryDirectory() as tmp:
+            task = self.make_task(tmp, self.REVIEW_OK.replace("**Режим согласования:** manual\n", ""), mode="auto")
+            self.assertEqual(dt.read_conveyor_mode(task), "auto")
+            code, out = run_cli("status", task)
+            self.assertIn("режим auto", out)                      # режим из файла, в 04a не указан
+        with tempfile.TemporaryDirectory() as tmp:
+            task = self.make_task(tmp, self.REVIEW_OK)
+            self.assertEqual(dt.read_conveyor_mode(task), "manual")  # дефолт без файла
+
+    def test_auto_stamp_mode_in_review(self):
+        """Пометка режима в 04a важнее режима каталога (согласовано в auto)."""
+        review_auto = self.REVIEW_OK.replace("manual", "auto")
+        with tempfile.TemporaryDirectory() as tmp:
+            task = self.make_task(tmp, review_auto, mode="manual")
+            code, out = run_cli("check", task)
+        self.assertEqual(code, 0)
+        self.assertIn("пакет 02/03/04 согласован (2026-08-23, режим auto; 04a)", out)
 
 
 if __name__ == "__main__":
