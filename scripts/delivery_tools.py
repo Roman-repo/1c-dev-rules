@@ -43,10 +43,11 @@ ARTIFACTS = {
 PROTOCOL_GLOB = "06-acceptance-protocol*.md"
 REWORK_LIST = "06a-rework-list.md"
 EPIC_CARD = "00-epic-brief.md"
-MODE_FILE = "_conveyor-mode.md"          # режим согласования каталога доставки (manual/auto)
+DESIGN_REVIEW = "04a-design-review.md"       # лист замечаний согласования (этап 3)
+MODE_FILE = "_conveyor-mode.md"              # режим согласования каталога доставки (manual/auto)
 
 STAGES = [
-    "Планирование", "Проектирование", "Разработка",
+    "Планирование", "Проектирование", "Согласование", "Разработка",
     "Внутренняя приёмка", "Внешняя приёмка", "Релиз",
 ]
 
@@ -221,15 +222,50 @@ class MatrixRow:
 
 
 @dataclass
+class DesignReview:
+    """Решение Оркестратора по пакету 02/03/04 (этап 3 «Согласование»).
+
+    Источник — артефакт 04a «Лист замечаний» (0.19.0+); штамп в секции
+    «Согласование Оркестратора» артефакта 04 — legacy-формат 0.18.0,
+    читается как фолбэк, когда 04a нет."""
+
+    source: str = ""                  # "04a" | "04 (0.18.0)"
+    checked: List[str] = field(default_factory=list)
+    decision: Optional[str] = None    # «Согласовано» / «Доработать»
+    mode: str = ""                    # manual/auto из штампа (пусто — не указан)
+    date: str = ""
+
+    @classmethod
+    def from_section(cls, section_text: str, source: str) -> "DesignReview":
+        review = cls(source=source)
+        for decision in APPROVAL_DECISIONS:
+            if re.search(rf"^\s*-\s*\[[xX]\]\s*\*\*{re.escape(decision)}\*\*", section_text, re.M):
+                review.checked.append(decision)
+        if len(review.checked) == 1:
+            review.decision = review.checked[0]
+        m = re.search(r"Режим[^:\n]*:\s*\*{0,2}\s*(manual|auto)", section_text, re.I)
+        if m:
+            review.mode = m.group(1).lower()
+        m = re.search(r"Дата[^:\n]*:\s*\*{0,2}\s*(\d{4}-\d{2}-\d{2}|\d{2}\.\d{2}\.\d{4})", section_text)
+        if m:
+            review.date = m.group(1)
+        return review
+
+
+def parse_design_review(path: Path) -> DesignReview:
+    """04a-design-review.md → решение Оркестратора (секция «Решение»)."""
+    sections = md_sections(read_text(path))
+    sec = find_section(sections, "Решение")
+    if sec is None:
+        return DesignReview(source="04a")
+    return DesignReview.from_section(sec, "04a")
+
+
+@dataclass
 class Matrix:
     rows: List[MatrixRow] = field(default_factory=list)
     parse_error: Optional[str] = None
-    # Согласование пакета 02/03/04 Оркестратором — секция в 04, гейт 2→3
-    approval_found: bool = False
-    approval_checked: List[str] = field(default_factory=list)
-    approval_decision: Optional[str] = None      # «Согласовано» / «Доработать»
-    approval_mode: str = ""                      # manual/auto из штампа (пусто — не указан)
-    approval_date: str = ""
+    approval: Optional[DesignReview] = None   # legacy: штамп в 04 (формат 0.18.0)
 
     def status_counts(self) -> Dict[str, List[str]]:
         """Критерии по типу статуса: ok — прошедшие (✅ в 05 или 06; ❌ сильнее ✅),
@@ -254,22 +290,12 @@ class Matrix:
 def parse_matrix(path: Path) -> Matrix:
     matrix = Matrix()
     sections = md_sections(read_text(path))
-    # Штамп согласования разбираем до таблиц: он валиден независимо от ошибок
-    # разбора самой матрицы (секция отдельная, формат как у решений 06).
+    # Legacy-штамп согласования (0.18.0 — секция в 04) разбираем до таблиц:
+    # он валиден независимо от ошибок разбора самой матрицы. Основной источник
+    # согласования с 0.19.0 — артефакт 04a.
     appr = find_section(sections, "Согласование", "Оркестратора")
     if appr is not None:
-        matrix.approval_found = True
-        for decision in APPROVAL_DECISIONS:
-            if re.search(rf"^\s*-\s*\[[xX]\]\s*\*\*{re.escape(decision)}\*\*", appr, re.M):
-                matrix.approval_checked.append(decision)
-        if len(matrix.approval_checked) == 1:
-            matrix.approval_decision = matrix.approval_checked[0]
-        m = re.search(r"Режим[^:\n]*:\s*\*{0,2}\s*(manual|auto)", appr, re.I)
-        if m:
-            matrix.approval_mode = m.group(1).lower()
-        m = re.search(r"Дата[^:\n]*:\s*\*{0,2}\s*(\d{4}-\d{2}-\d{2}|\d{2}\.\d{2}\.\d{4})", appr)
-        if m:
-            matrix.approval_date = m.group(1)
+        matrix.approval = DesignReview.from_section(appr, "04 (0.18.0)")
     sec = find_section(sections, "Матрица")
     if sec is None:
         matrix.parse_error = "секция «Матрица трассировки и критерии приёмки» не найдена"
@@ -461,6 +487,7 @@ class TaskState:
     task_dir: Path
     brief: Optional[Brief] = None
     matrix: Optional[Matrix] = None
+    design_review: Optional[DesignReview] = None
     internal: Optional[InternalReport] = None
     protocols: List[Protocol] = field(default_factory=list)
     rework_list: Optional[Path] = None
@@ -470,6 +497,14 @@ class TaskState:
     def latest_protocol(self) -> Optional[Protocol]:
         return self.protocols[-1] if self.protocols else None
 
+    @property
+    def approval(self) -> Optional[DesignReview]:
+        """Согласование пакета 02/03/04: артефакт 04a (0.19.0+) либо
+        legacy-штамп в секции 04 (0.18.0), если 04a нет."""
+        if self.design_review is not None:
+            return self.design_review
+        return self.matrix.approval if self.matrix else None
+
 
 def load_state(task_dir: Path) -> TaskState:
     state = TaskState(task_dir=task_dir)
@@ -477,6 +512,8 @@ def load_state(task_dir: Path) -> TaskState:
         state.brief = parse_brief(task_dir / ARTIFACTS[1])
     if (task_dir / ARTIFACTS[4]).is_file():
         state.matrix = parse_matrix(task_dir / ARTIFACTS[4])
+    if (task_dir / DESIGN_REVIEW).is_file():
+        state.design_review = parse_design_review(task_dir / DESIGN_REVIEW)
     if (task_dir / ARTIFACTS[5]).is_file():
         state.internal = parse_internal(task_dir / ARTIFACTS[5])
     state.protocols = find_protocols(task_dir)
@@ -518,11 +555,12 @@ def next_step(state: TaskState) -> List[str]:
         if empties:
             steps.append(f"матрица 04: пустые ячейки трассировки у критериев {fmt_nums(empties)} (DoD 2→3)")
     if not (state.task_dir / ARTIFACTS[5]).is_file() and not missing_design:
-        approved = state.matrix is not None and state.matrix.approval_decision == "Согласовано"
-        if state.matrix is not None and not approved:
+        approval = state.approval
+        approved = approval is not None and approval.decision == "Согласовано"
+        if not approved:
             mode = read_conveyor_mode(state.task_dir)
-            steps.append(f"согласование пакета 02/03/04 с Оркестратором (гейт 2→3, режим {mode}) — "
-                         f"штамп в 04; в manual код не начинается до решения")
+            steps.append(f"этап 3 Согласование (режим {mode}): предъявить пакет 02/03/04 Оркестратору → "
+                         f"лист замечаний 04a; в manual код не начинается до «Согласовано»")
         else:
             steps.append("Разработка (1c-dispatch-gate) → внутренняя приёмка (артефакт 05)")
     internal = state.internal
@@ -540,7 +578,7 @@ def next_step(state: TaskState) -> List[str]:
             steps.append("протокол 06: решение не отмечено (или отмечено несколько)")
         elif d == "Отложено":
             steps.append(f"приёмка отложена — возобновление новым протоколом 06-acceptance-protocol.r{proto.round + 1}.md "
-                         f"(переход на Релиз запрещён, DoD 5→6)")
+                         f"(переход на Релиз запрещён, DoD 6→7)")
         elif d == "Возврат":
             base = "лист возврата 06a" + (" (не найден!)" if not state.rework_list else "")
             steps.append(f"возврат: {base}, классы {proto.remark_classes or '?'} → целевые этапы; после правки — повторная приёмка")
@@ -552,22 +590,31 @@ def next_step(state: TaskState) -> List[str]:
                 else:
                     steps.append("принято — задача в релизе (этап 6 закрыт по артефактам)")
             else:
-                steps.append("принято — этап 6 Релиз (1c-release): включить задачу в состав релиза")
+                steps.append("принято — этап 7 Релиз (1c-release): включить задачу в состав релиза")
             if state.brief and not state.brief.retrospective_filled and any(not r.is_draft for r in state.releases):
                 steps.append("заполнить ретроспективу 01 (оценка/факт, возвраты, вывод) — закрытие задачи")
     return steps
 
 
 def stage_reached(state: TaskState) -> int:
-    """Номер достигнутого этапа: самый поздний существующий артефакт + решение
-    протокола. Артефакт N принадлежит этапу N (01→1 … 05→4), протокол — этапу 5;
-    «принято» открывает этап 6 «Релиз». 0 — артефактов нет."""
-    reached = max((n for n in ARTIFACTS if (state.task_dir / ARTIFACTS[n]).is_file()), default=0)
+    """Номер достигнутого этапа (7-этапная модель, 0.19.0): 01→1; 02/03/04→2;
+    04a→3 (Согласование); 05→5 (этап 4 «Разработка» файлового маркера не имеет —
+    известный пробел, статусы ревью в шапке 05); протокол→6, «принято»→7.
+    0 — артефактов нет."""
+    reached = 0
+    if (state.task_dir / ARTIFACTS[1]).is_file():
+        reached = 1
+    if any((state.task_dir / ARTIFACTS[n]).is_file() for n in (2, 3, 4)):
+        reached = max(reached, 2)
+    if (state.task_dir / DESIGN_REVIEW).is_file():
+        reached = max(reached, 3)
+    if (state.task_dir / ARTIFACTS[5]).is_file():
+        reached = max(reached, 5)
     proto = state.latest_protocol
     if proto:
-        reached = 5
+        reached = 6
         if proto.decision in ("Принято", "Принято с замечаниями"):
-            reached = 6
+            reached = 7
     return reached
 
 
@@ -610,18 +657,20 @@ def cmd_status(task_dir: Path) -> int:
               f"⏳ {len(c['deferred'])} ({fmt_nums(c['deferred'])}), "
               f"❌ {len(c['red'])} ({fmt_nums(c['red'])}), "
               f"☐ {len(c['todo'])} ({fmt_nums(c['todo'])})")
-    if state.matrix:
-        m = state.matrix
+    approval = state.approval
+    if state.matrix or approval:
         mode = read_conveyor_mode(task_dir)
-        if not m.approval_found:
-            print(f"Согласование 04: нет секции «Согласование Оркестратора» (гейт 2→3; режим каталога: {mode})")
-        elif m.approval_decision == "Согласовано":
-            stamp = m.approval_mode or mode
-            print(f"Согласование 04: ✅ Согласовано{f', {m.approval_date}' if m.approval_date else ''} (режим {stamp})")
-        elif m.approval_decision == "Доработать":
-            print("Согласование 04: ❌ Доработать — без кода до повторного согласования")
+        if approval is None:
+            print(f"Согласование: нет листа замечаний 04a (этап 3; режим каталога: {mode})")
+        elif approval.decision == "Согласовано":
+            stamp = approval.mode or mode
+            when = f", {approval.date}" if approval.date else ""
+            print(f"Согласование: ✅ Согласовано{when} (режим {stamp}; {approval.source})")
+        elif approval.decision == "Доработать":
+            print(f"Согласование: ❌ Доработать — возврат на проектирование/требования, "
+                  f"без кода до повторного согласования ({approval.source})")
         else:
-            print(f"Согласование 04: решение не отмечено (режим каталога: {mode})")
+            print(f"Согласование: решение не отмечено в {approval.source} (режим каталога: {mode})")
     if state.internal:
         red = "🔴 " + "; ".join(state.internal.red_rows) if state.internal.red_rows else "нет"
         static = ", статический режим" if state.internal.static_mode else ""
@@ -764,31 +813,6 @@ def check_gate_2_3(state: TaskState, out: List[Finding]) -> None:
     if missing:
         out.append(Finding("ERR", gate, f"матрица 04 есть, но отсутствуют {', '.join(missing)}"))
     matrix = state.matrix
-    # Согласование пакета 02/03/04 Оркестратором (1c-delivery-gate §0, 0.18.0).
-    # Отсутствие секции — WARN, не ERR: задачи, начатые до 0.18.0, прожиты без
-    # согласования, задним числом их не блокируем.
-    mode = read_conveyor_mode(state.task_dir)
-    dev_started = (state.task_dir / ARTIFACTS[5]).is_file() or bool(state.protocols)
-    if not matrix.approval_found:
-        out.append(Finding("WARN", gate,
-                           "в 04 нет секции «Согласование Оркестратора» (гейт 2→3) — "
-                           f"задача начата до 0.18.0 или согласование пропущено; режим каталога: {mode}"))
-    elif len(matrix.approval_checked) > 1:
-        out.append(Finding("ERR", gate, f"в 04 отмечено несколько решений согласования: {matrix.approval_checked}"))
-    elif matrix.approval_decision is None:
-        out.append(Finding("WARN", gate, "решение согласования в 04 не отмечено (Согласовано / Доработать)"))
-    elif matrix.approval_decision == "Согласовано":
-        if not matrix.approval_date:
-            out.append(Finding("WARN", gate, "согласование без даты в 04"))
-        else:
-            out.append(Finding("INFO", gate,
-                               f"пакет 02/03/04 согласован ({matrix.approval_date}, "
-                               f"режим {matrix.approval_mode or mode})"))
-    elif matrix.approval_decision == "Доработать":
-        if dev_started:
-            out.append(Finding("ERR", gate, "разработка начата при решении «Доработать» — возврат на согласование (без кода до штампа)"))
-        else:
-            out.append(Finding("WARN", gate, "пакет отправлен на доработку — без кода до повторного согласования"))
     if matrix.parse_error:
         out.append(Finding("ERR", gate, f"04: {matrix.parse_error}"))
         return
@@ -815,14 +839,46 @@ def check_gate_2_3(state: TaskState, out: List[Finding]) -> None:
 
 
 def check_gate_3_4(state: TaskState, out: List[Finding]) -> None:
-    if state.internal and state.internal.input_checks_failed:
-        out.append(Finding("ERR", "3→4", "в шапке 05 «Входные проверки разработки» содержит ❌ — ревью-прогоны не зелёные"))
-    elif state.internal:
-        out.append(Finding("INFO", "3→4", "код и ревью-прогоны вне досягаемости скрипта; статусы зафиксированы в шапке 05"))
+    """Согласование пакета 02/03/04 Оркестратором — этап 3 (1c-delivery-gate §0).
+
+    Основной источник — артефакт 04a «Лист замечаний» (0.19.0+); штамп в 04 —
+    legacy 0.18.0. Отсутствие согласования — WARN, не ERR: задачи, начатые
+    до введения этапа, прожиты без него, задним числом не блокируем."""
+    gate = "3→4"
+    approval = state.approval
+    mode = read_conveyor_mode(state.task_dir)
+    dev_started = (state.task_dir / ARTIFACTS[5]).is_file() or bool(state.protocols)
+    if approval is None:
+        out.append(Finding("WARN", gate,
+                           "нет согласования пакета 02/03/04 (лист замечаний 04a или legacy-штамп в 04) — "
+                           f"задача начата до 0.19.0 или согласование пропущено; режим каталога: {mode}"))
+        return
+    if len(approval.checked) > 1:
+        out.append(Finding("ERR", gate, f"в {approval.source} отмечено несколько решений согласования: {approval.checked}"))
+    elif approval.decision is None:
+        out.append(Finding("WARN", gate, f"решение согласования в {approval.source} не отмечено (Согласовано / Доработать)"))
+    elif approval.decision == "Согласовано":
+        if not approval.date:
+            out.append(Finding("WARN", gate, f"согласование без даты в {approval.source}"))
+        else:
+            out.append(Finding("INFO", gate,
+                               f"пакет 02/03/04 согласован ({approval.date}, режим {approval.mode or mode}; {approval.source})"))
+    elif approval.decision == "Доработать":
+        if dev_started:
+            out.append(Finding("ERR", gate, "разработка начата при решении «Доработать» — возврат на проектирование/требования, без кода до «Согласовано»"))
+        else:
+            out.append(Finding("WARN", gate, "пакет отправлен на доработку — без кода до повторного согласования"))
 
 
 def check_gate_4_5(state: TaskState, out: List[Finding]) -> None:
-    gate = "4→5"
+    if state.internal and state.internal.input_checks_failed:
+        out.append(Finding("ERR", "4→5", "в шапке 05 «Входные проверки разработки» содержит ❌ — ревью-прогоны не зелёные"))
+    elif state.internal:
+        out.append(Finding("INFO", "4→5", "код и ревью-прогоны вне досягаемости скрипта; статусы зафиксированы в шапке 05"))
+
+
+def check_gate_5_6(state: TaskState, out: List[Finding]) -> None:
+    gate = "5→6"
     rep = state.internal
     if not rep:
         return
@@ -836,8 +892,8 @@ def check_gate_4_5(state: TaskState, out: List[Finding]) -> None:
         out.append(Finding("INFO", gate, "05 без красных строк, вердикт отмечен" + (" (статический режим)" if rep.static_mode else "")))
 
 
-def check_gate_5_6(state: TaskState, out: List[Finding]) -> None:
-    gate = "5→6"
+def check_gate_6_7(state: TaskState, out: List[Finding]) -> None:
+    gate = "6→7"
     proto = state.latest_protocol
     if not proto:
         return
@@ -885,8 +941,8 @@ def check_gate_5_6(state: TaskState, out: List[Finding]) -> None:
                                f"unit/BDD-тестом, а не ручной проверкой (rework-rules)"))
 
 
-def check_gate_6(state: TaskState, out: List[Finding]) -> None:
-    gate = "6"
+def check_gate_7(state: TaskState, out: List[Finding]) -> None:
+    gate = "7"
     proto = state.latest_protocol
     decision = proto.decision if proto else None
     if not state.releases:
@@ -912,7 +968,7 @@ def check_gate_6(state: TaskState, out: List[Finding]) -> None:
                 if state.brief and not state.brief.retrospective_filled:
                     out.append(Finding("WARN", gate,
                                        "ретроспектива 01 не заполнена (оценка/факт, возвраты, вывод) — "
-                                       "петля оценки не закрыта (DoD «6 → закрытие»)"))
+                                       "петля оценки не закрыта (DoD «7 → закрытие»)"))
 
 
 def cmd_check(task_dir: Path) -> int:
@@ -926,10 +982,11 @@ def cmd_check(task_dir: Path) -> int:
     check_gate_3_4(state, out)
     check_gate_4_5(state, out)
     check_gate_5_6(state, out)
-    check_gate_6(state, out)
+    check_gate_6_7(state, out)
+    check_gate_7(state, out)
 
     icons = {"ERR": "❌", "WARN": "🟡", "INFO": "✅"}
-    for gate in ("1→2", "2→3", "3→4", "4→5", "5→6", "6"):
+    for gate in ("1→2", "2→3", "3→4", "4→5", "5→6", "6→7", "7"):
         gate_findings = [f for f in out if f.gate == gate]
         if not gate_findings:
             continue
