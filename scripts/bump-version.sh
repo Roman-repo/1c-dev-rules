@@ -2,8 +2,9 @@
 # bump-version.sh — атомарно бампит версию плагина в plugin.json + marketplace.json
 # + kimi.plugin.json (если файл существует — манифест для Kimi; отсутствие файла
 # не считается ошибкой, чтобы скрипт работал и в ZCode-only копиях репо)
-# + README.md — бейдж версии в шапке (версия видна пользователю; README есть,
-# а бейджа нет → рассинхрон, exit 1).
+# + README.md — версия в заголовке H1 («# <имя> — X.Y.Z») и бейдж в шапке
+# (версия видна пользователю сразу; README есть, а версии в H1/бейдже нет →
+# рассинхрон, exit 1).
 # СИНХРОННО и с верификацией. Предотвращает инцидент F1 (0.4.0): plugin.json и
 # CHANGELOG ушли на новую версию, а marketplace.json отстал → ZCode не обновил кэш,
 # релиз не дошёл до пользователей.
@@ -89,10 +90,15 @@ if has_kimi == "1":
 if has_readme == "1":
     with open(readme_path, encoding="utf-8") as f:
         readme = f.read()
+    readme, n_h1 = re.subn(r"^(# [^\n]*? — )[0-9]+\.[0-9]+\.[0-9]+[ \t]*$",
+                           lambda m: m.group(1) + new, readme, count=1, flags=re.M)
     readme, n_label = re.subn(r"(!\[Version: )[0-9]+\.[0-9]+\.[0-9]+(\])",
                               lambda m: m.group(1) + new + m.group(2), readme, count=1)
     readme, n_url = re.subn(r"(badge/version-)[0-9]+\.[0-9]+\.[0-9]+(-blue\.svg)",
                             lambda m: m.group(1) + new + m.group(2), readme, count=1)
+    if n_h1 != 1:
+        print("❌ README.md: в заголовке H1 нет версии («# <имя> — X.Y.Z») — добавьте версию после имени")
+        sys.exit(1)
     if n_label != 1 or n_url != 1:
         print("❌ README.md: не найден бейдж версии [![Version: X.Y.Z](…badge/version-X.Y.Z-blue.svg)] — добавьте/поправьте бейдж в шапке README")
         sys.exit(1)
@@ -106,11 +112,11 @@ VK="$NEW"
 [[ "$HAS_KIMI" == "1" ]] && VK="$(cur "$KIMI_JSON")"
 VR=ok
 if [[ "$HAS_README" == "1" ]]; then
-    grep -Fq "[![Version: $NEW]" "$README_MD" && grep -q "badge/version-$NEW-blue.svg" "$README_MD" || VR=fail
+    { grep -Fq "[![Version: $NEW]" "$README_MD" && grep -q "badge/version-$NEW-blue.svg" "$README_MD" && grep -Eq "^# .+ — $NEW[[:space:]]*$" "$README_MD"; } || VR=fail
 fi
 if [[ "$VP" == "$NEW" && "$VM" == "$NEW" && "$VK" == "$NEW" && "$VR" == "ok" ]]; then
     if [[ "$HAS_KIMI" == "1" && "$HAS_README" == "1" ]]; then
-        echo "✅ plugin.json=$VP, marketplace.json=$VM, kimi.plugin.json=$VK, README-бейдж — синхронно."
+        echo "✅ plugin.json=$VP, marketplace.json=$VM, kimi.plugin.json=$VK, README (H1 + бейдж) — синхронно."
     elif [[ "$HAS_KIMI" == "1" ]]; then
         echo "✅ plugin.json=$VP, marketplace.json=$VM, kimi.plugin.json=$VK — синхронно (README отсутствует, пропущен)."
     else
@@ -118,6 +124,6 @@ if [[ "$VP" == "$NEW" && "$VM" == "$NEW" && "$VK" == "$NEW" && "$VR" == "ok" ]];
     fi
     echo "📝 Не забудьте: добавить запись [$NEW] в docs/CHANGELOG.md."
 else
-    echo "❌ РАССИНХРОН: plugin.json=$VP, marketplace.json=$VM, kimi.plugin.json=$VK, README-бейдж=$VR (ожидался $NEW)"
+    echo "❌ РАССИНХРОН: plugin.json=$VP, marketplace.json=$VM, kimi.plugin.json=$VK, README(H1+бейдж)=$VR (ожидался $NEW)"
     exit 1
 fi
