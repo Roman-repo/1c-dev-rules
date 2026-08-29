@@ -1,7 +1,7 @@
 {
   "$schema": "https://catalog.deva.msh.team/schemas/kimi.plugin.schema.json",
   "name": "1c-dev-rules",
-  "version": "0.22.3",
+  "version": "0.23.0",
   "description": "Универсальный подключаемый набор правил разработки 1С:Предприятие 8 на основе v8std. Скилы для написания и ревью кода: запросы, формы, метаданные, транзакции, производительность, чек-листы.",
   "keywords": [
     "1c",
@@ -50,5 +50,5 @@
     "./skills/1c-thin-triggers/",
     "./skills/1c-ui-ux/"
   ],
-  "skillInstructions": "Use the 1c-* skills for any 1C:Enterprise 8 (1С:Предприятие 8) development or code-review task: BSL code, queries, managed forms, metadata XML (.mdo/.form), transactions, extensions, reports (СКД), security/RLS, performance. Always open the 1c-dispatch-gate skill FIRST — it routes the task to the thematic skills and lists mandatory gate checks. After writing code, run the 1c-thin-triggers self-check and 1c-code-review. For a full task lifecycle (planning → design → development → acceptance → release) start with 1c-delivery-gate instead; for an initiative larger than one task (epic) start with 1c-epic-planning. When creating or editing metadata objects, dogfood scripts/validate-new-object.sh on the object directory. Do not invent BSL API — verify functions exist in the project sources."
+  "skillInstructions": "Use the 1c-* skills for any 1C:Enterprise 8 (1С:Предприятие 8) development or code-review task: BSL code, queries, managed forms, metadata XML (.mdo/.form), transactions, extensions, reports (СКД), security/RLS, performance. Always open the 1c-dispatch-gate skill FIRST — it routes the task to the thematic skills and lists mandatory gate checks. After writing code, run the 1c-thin-triggers self-check and 1c-code-review. For a full task lifecycle (planning → design → approval → development → internal acceptance → code review → external acceptance → release) start with 1c-delivery-gate instead; stage «Code review» (after internal acceptance, before external) uses 1c-code-review with the checkbsl rules catalog and records the reviewer decision in 05a-code-review.md; for an initiative larger than one task (epic) start with 1c-epic-planning. When creating or editing metadata objects, dogfood scripts/validate-new-object.sh on the object directory. Do not invent BSL API — verify functions exist in the project sources."
 }

@@ -8,8 +8,9 @@ delivery_tools.py — состояние задачи конвейера раз�
 его из самих артефактов (без дублирующего файла состояния, который может
 протухнуть) и проверяет те условия DoD-гейтов, которые сводятся к структуре
 документа: наличие артефактов, пустые ячейки матрицы 04, красные строки 05,
-решение протокола 06, «принято» в составе релиза. Код и ревью-прогоны
-(гейт 3→4) скрипту недоступны — они фиксируются в шапке 05.
+решение ревью 05a, решение протокола 06, «принято» в составе релиза. Код и
+самопрогоны разработки (гейт 4→5) скрипту недоступны — они фиксируются в
+шапке 05; код ревью (этап 6) — артефакт 05a.
 
 Использование (аргумент — каталог задачи, обычно docs/delivery/<ID-задачи>):
     python3 scripts/delivery_tools.py status <каталог-задачи>   # сводка состояния
@@ -44,15 +45,17 @@ PROTOCOL_GLOB = "06-acceptance-protocol*.md"
 REWORK_LIST = "06a-rework-list.md"
 EPIC_CARD = "00-epic-brief.md"
 DESIGN_REVIEW = "04a-design-review.md"       # лист замечаний согласования (этап 3)
+CODE_REVIEW = "05a-code-review.md"           # лист код-ревью (этап 6)
 MODE_FILE = "_conveyor-mode.md"              # режим согласования каталога доставки (manual/auto)
 
 STAGES = [
     "Планирование", "Проектирование", "Согласование", "Разработка",
-    "Внутренняя приёмка", "Внешняя приёмка", "Релиз",
+    "Внутренняя приёмка", "Код ревью", "Внешняя приёмка", "Релиз",
 ]
 
 DECISIONS = ("Принято с замечаниями", "Принято", "Возврат", "Отложено")
 APPROVAL_DECISIONS = ("Согласовано", "Доработать")  # штамп Оркестратора в 04 (гейт 2→3)
+REVIEW_DECISIONS = ("Одобрено", "Доработать")       # решение Ревьюера в 05a (гейт 6→7)
 
 # --- разбор markdown --------------------------------------------------------
 
@@ -259,6 +262,47 @@ def parse_design_review(path: Path) -> DesignReview:
     if sec is None:
         return DesignReview(source="04a")
     return DesignReview.from_section(sec, "04a")
+
+
+@dataclass
+class CodeReview:
+    """Решение Ревьюера по коду задачи (этап 6 «Код ревью»).
+
+    Источник — артефакт 05a «Лист код-ревью» (0.23.0+). Строка «Входные
+    проверки разработки: code-review ✅» в шапке 05 фолбэком НЕ является:
+    это самопрогон Исполнителя на этапе «Разработка» (гейт 4→5), не решение
+    Ревьюера — задачи без 05a получают WARN без блокировки (как с 04a)."""
+
+    source: str = ""                  # "05a" | "05 (шапка, до 0.23.0)"
+    checked: List[str] = field(default_factory=list)
+    decision: Optional[str] = None    # «Одобрено» / «Доработать»
+    mode: str = ""                    # manual/auto из листа (пусто — не указан)
+    date: str = ""
+
+    @classmethod
+    def from_section(cls, section_text: str, source: str) -> "CodeReview":
+        review = cls(source=source)
+        for decision in REVIEW_DECISIONS:
+            if re.search(rf"^\s*-\s*\[[xX]\]\s*\*\*{re.escape(decision)}\*\*", section_text, re.M):
+                review.checked.append(decision)
+        if len(review.checked) == 1:
+            review.decision = review.checked[0]
+        m = re.search(r"Режим[^:\n]*:\s*\*{0,2}\s*(manual|auto)", section_text, re.I)
+        if m:
+            review.mode = m.group(1).lower()
+        m = re.search(r"Дата[^:\n]*:\s*\*{0,2}\s*(\d{4}-\d{2}-\d{2}|\d{2}\.\d{2}\.\d{4})", section_text)
+        if m:
+            review.date = m.group(1)
+        return review
+
+
+def parse_code_review(path: Path) -> CodeReview:
+    """05a-code-review.md → решение Ревьюера (секция «Решение»)."""
+    sections = md_sections(read_text(path))
+    sec = find_section(sections, "Решение")
+    if sec is None:
+        return CodeReview(source="05a")
+    return CodeReview.from_section(sec, "05a")
 
 
 @dataclass
@@ -489,6 +533,7 @@ class TaskState:
     matrix: Optional[Matrix] = None
     design_review: Optional[DesignReview] = None
     internal: Optional[InternalReport] = None
+    code_review: Optional[CodeReview] = None
     protocols: List[Protocol] = field(default_factory=list)
     rework_list: Optional[Path] = None
     releases: List[ReleaseRef] = field(default_factory=list)
@@ -516,6 +561,8 @@ def load_state(task_dir: Path) -> TaskState:
         state.design_review = parse_design_review(task_dir / DESIGN_REVIEW)
     if (task_dir / ARTIFACTS[5]).is_file():
         state.internal = parse_internal(task_dir / ARTIFACTS[5])
+    if (task_dir / CODE_REVIEW).is_file():
+        state.code_review = parse_code_review(task_dir / CODE_REVIEW)
     state.protocols = find_protocols(task_dir)
     if (task_dir / REWORK_LIST).is_file():
         state.rework_list = task_dir / REWORK_LIST
@@ -570,15 +617,24 @@ def next_step(state: TaskState) -> List[str]:
         elif internal.verdict_unchecked:
             steps.append("вердикт 05 не завершён (неотмеченные пункты)")
     proto = state.latest_protocol
+    review = state.code_review
     if internal and not internal.red_rows and not proto:
-        steps.append("внешняя приёмка (1c-external-acceptance): демонстрация по матрице 04 → протокол 06")
+        if review is not None and review.decision == "Одобрено":
+            steps.append("внешняя приёмка (1c-external-acceptance): демонстрация по матрице 04 → протокол 06")
+        else:
+            mode = read_conveyor_mode(state.task_dir)
+            steps.append(f"код ревью (1c-code-review, этап 6): чек-лист + каталог checkbsl → лист 05a "
+                         f"(режим каталога: {mode}; в manual внешняя приёмка не начинается до «Одобрено»)")
+    if review is not None and review.decision == "Доработать" and proto:
+        steps.append("🔴 внешняя приёмка начата при решении ревью «Доработать» — возврат в Разработку, "
+                     "повтор затронутых проверок 05 и ревью")
     if proto:
         d = proto.decision
         if d is None:
             steps.append("протокол 06: решение не отмечено (или отмечено несколько)")
         elif d == "Отложено":
             steps.append(f"приёмка отложена — возобновление новым протоколом 06-acceptance-protocol.r{proto.round + 1}.md "
-                         f"(переход на Релиз запрещён, DoD 6→7)")
+                         f"(переход на Релиз запрещён, DoD 7→8)")
         elif d == "Возврат":
             base = "лист возврата 06a" + (" (не найден!)" if not state.rework_list else "")
             steps.append(f"возврат: {base}, классы {proto.remark_classes or '?'} → целевые этапы; после правки — повторная приёмка")
@@ -588,19 +644,19 @@ def next_step(state: TaskState) -> List[str]:
                 if drafts:
                     steps.append(f"принято — повысить черновик _releases/{drafts[0].dir_name} до боевого (протокол в «Отбор»)")
                 else:
-                    steps.append("принято — задача в релизе (этап 6 закрыт по артефактам)")
+                    steps.append("принято — задача в релизе (этап 8 закрыт по артефактам)")
             else:
-                steps.append("принято — этап 7 Релиз (1c-release): включить задачу в состав релиза")
+                steps.append("принято — этап 8 Релиз (1c-release): включить задачу в состав релиза")
             if state.brief and not state.brief.retrospective_filled and any(not r.is_draft for r in state.releases):
                 steps.append("заполнить ретроспективу 01 (оценка/факт, возвраты, вывод) — закрытие задачи")
     return steps
 
 
 def stage_reached(state: TaskState) -> int:
-    """Номер достигнутого этапа (7-этапная модель, 0.19.0): 01→1; 02/03/04→2;
+    """Номер достигнутого этапа (8-этапная модель, 0.23.0): 01→1; 02/03/04→2;
     04a→3 (Согласование); 05→5 (этап 4 «Разработка» файлового маркера не имеет —
-    известный пробел, статусы ревью в шапке 05); протокол→6, «принято»→7.
-    0 — артефактов нет."""
+    известный пробел, самопрогоны в шапке 05); 05a→6 (Код ревью); протокол→7,
+    «принято»→8. 0 — артефактов нет."""
     reached = 0
     if (state.task_dir / ARTIFACTS[1]).is_file():
         reached = 1
@@ -610,11 +666,13 @@ def stage_reached(state: TaskState) -> int:
         reached = max(reached, 3)
     if (state.task_dir / ARTIFACTS[5]).is_file():
         reached = max(reached, 5)
+    if (state.task_dir / CODE_REVIEW).is_file():
+        reached = max(reached, 6)
     proto = state.latest_protocol
     if proto:
-        reached = 6
+        reached = 7
         if proto.decision in ("Принято", "Принято с замечаниями"):
-            reached = 7
+            reached = 8
     return reached
 
 
@@ -638,7 +696,8 @@ def cmd_status(task_dir: Path) -> int:
     if proto:
         proto_desc = f"{proto.path.name} (раунд {proto.round})"
     rework = "✓" if state.rework_list else "—"
-    print(f"Артефакты: {arts} | 06: {proto_desc} | 06a: {rework}")
+    review_art = "✓" if state.code_review else "—"
+    print(f"Артефакты: {arts} | 05a: {review_art} | 06: {proto_desc} | 06a: {rework}")
 
     # Этап: самый поздний существующий артефакт + решение протокола
     # (см. stage_reached).
@@ -675,6 +734,19 @@ def cmd_status(task_dir: Path) -> int:
         red = "🔴 " + "; ".join(state.internal.red_rows) if state.internal.red_rows else "нет"
         static = ", статический режим" if state.internal.static_mode else ""
         print(f"Отчёт 05: красные строки — {red}{static}")
+    review = state.code_review
+    if state.internal or review:
+        mode = read_conveyor_mode(task_dir)
+        if review is None:
+            print(f"Код ревью: нет листа 05a (этап 6; режим каталога: {mode})")
+        elif review.decision == "Одобрено":
+            stamp = review.mode or mode
+            when = f", {review.date}" if review.date else ""
+            print(f"Код ревью: ✅ Одобрено{when} (режим {stamp}; {review.source})")
+        elif review.decision == "Доработать":
+            print(f"Код ревью: ❌ Доработать — возврат в Разработку, повтор затронутых проверок 05 ({review.source})")
+        else:
+            print(f"Код ревью: решение не отмечено в {review.source} (режим каталога: {mode})")
     repeated = {n: rs for n, rs in repeated_failures(state.protocols).items() if len(rs) >= 2}
     if repeated:
         details = "; ".join(f"критерий {n} (раунды {', '.join(map(str, rs))})" for n, rs in sorted(repeated.items()))
@@ -872,9 +944,9 @@ def check_gate_3_4(state: TaskState, out: List[Finding]) -> None:
 
 def check_gate_4_5(state: TaskState, out: List[Finding]) -> None:
     if state.internal and state.internal.input_checks_failed:
-        out.append(Finding("ERR", "4→5", "в шапке 05 «Входные проверки разработки» содержит ❌ — ревью-прогоны не зелёные"))
+        out.append(Finding("ERR", "4→5", "в шапке 05 «Входные проверки разработки» содержит ❌ — самопрогоны разработки не зелёные"))
     elif state.internal:
-        out.append(Finding("INFO", "4→5", "код и ревью-прогоны вне досягаемости скрипта; статусы зафиксированы в шапке 05"))
+        out.append(Finding("INFO", "4→5", "код и самопрогоны разработки вне досягаемости скрипта; статусы зафиксированы в шапке 05 (код ревью — отдельный этап 6, артефакт 05a)"))
 
 
 def check_gate_5_6(state: TaskState, out: List[Finding]) -> None:
@@ -893,7 +965,41 @@ def check_gate_5_6(state: TaskState, out: List[Finding]) -> None:
 
 
 def check_gate_6_7(state: TaskState, out: List[Finding]) -> None:
+    """Код ревью — этап 6 (1c-code-review): проверка кода на стандарты после
+    внутренней приёмки.
+
+    Источник — артефакт 05a «Лист код-ревью» (0.23.0+). Строка «code-review ✅»
+    в шапке 05 источником не является — это самопрогон разработки (гейт 4→5).
+    Отсутствие ревью — WARN, не ERR: задачи, начатые до введения этапа,
+    прожиты без него, задним числом не блокируем (как с 04a в 0.19.0)."""
     gate = "6→7"
+    review = state.code_review
+    mode = read_conveyor_mode(state.task_dir)
+    ext_started = bool(state.protocols)
+    if review is None:
+        out.append(Finding("WARN", gate,
+                           "нет код ревью — лист 05a-code-review.md не найден — "
+                           f"задача начата до 0.23.0 или ревью пропущено; режим каталога: {mode}"))
+        return
+    if len(review.checked) > 1:
+        out.append(Finding("ERR", gate, f"в {review.source} отмечено несколько решений ревью: {review.checked}"))
+    elif review.decision is None:
+        out.append(Finding("WARN", gate, f"решение ревью в {review.source} не отмечено (Одобрено / Доработать)"))
+    elif review.decision == "Одобрено":
+        if not review.date:
+            out.append(Finding("WARN", gate, f"ревью без даты в {review.source}"))
+        else:
+            out.append(Finding("INFO", gate,
+                               f"код прошёл ревью ({review.date}, режим {review.mode or mode}; {review.source})"))
+    elif review.decision == "Доработать":
+        if ext_started:
+            out.append(Finding("ERR", gate, "внешняя приёмка начата при решении ревью «Доработать» — возврат в Разработку, без демонстрации до «Одобрено»"))
+        else:
+            out.append(Finding("WARN", gate, "код отправлен на доработку — без внешней приёмки до повторного ревью"))
+
+
+def check_gate_7_8(state: TaskState, out: List[Finding]) -> None:
+    gate = "7→8"
     proto = state.latest_protocol
     if not proto:
         return
@@ -941,8 +1047,8 @@ def check_gate_6_7(state: TaskState, out: List[Finding]) -> None:
                                f"unit/BDD-тестом, а не ручной проверкой (rework-rules)"))
 
 
-def check_gate_7(state: TaskState, out: List[Finding]) -> None:
-    gate = "7"
+def check_gate_8(state: TaskState, out: List[Finding]) -> None:
+    gate = "8"
     proto = state.latest_protocol
     decision = proto.decision if proto else None
     if not state.releases:
@@ -955,7 +1061,7 @@ def check_gate_7(state: TaskState, out: List[Finding]) -> None:
             if decision in ("Принято", "Принято с замечаниями"):
                 out.append(Finding("WARN", gate, f"{label} (черновик): приёмка уже закрыта «принято» — повысить до боевого"))
             else:
-                out.append(Finding("INFO", gate, f"{label} (черновик) — легален при «Отложено»/«Возврат»; в поставку не включять"))
+                out.append(Finding("INFO", gate, f"{label} (черновик) — легален при «Отложено»/«Возврат»; в поставку не включать"))
         else:
             if decision not in ("Принято", "Принято с замечаниями"):
                 out.append(Finding("ERR", gate,
@@ -968,7 +1074,7 @@ def check_gate_7(state: TaskState, out: List[Finding]) -> None:
                 if state.brief and not state.brief.retrospective_filled:
                     out.append(Finding("WARN", gate,
                                        "ретроспектива 01 не заполнена (оценка/факт, возвраты, вывод) — "
-                                       "петля оценки не закрыта (DoD «7 → закрытие»)"))
+                                       "петля оценки не закрыта (DoD «8 → закрытие»)"))
 
 
 def cmd_check(task_dir: Path) -> int:
@@ -983,10 +1089,11 @@ def cmd_check(task_dir: Path) -> int:
     check_gate_4_5(state, out)
     check_gate_5_6(state, out)
     check_gate_6_7(state, out)
-    check_gate_7(state, out)
+    check_gate_7_8(state, out)
+    check_gate_8(state, out)
 
     icons = {"ERR": "❌", "WARN": "🟡", "INFO": "✅"}
-    for gate in ("1→2", "2→3", "3→4", "4→5", "5→6", "6→7", "7"):
+    for gate in ("1→2", "2→3", "3→4", "4→5", "5→6", "6→7", "7→8", "8"):
         gate_findings = [f for f in out if f.gate == gate]
         if not gate_findings:
             continue
@@ -1008,8 +1115,8 @@ USAGE = """Использование:
   python3 scripts/delivery_tools.py roadmap <каталог-доставки>
 
 status  — сводка состояния задачи по артефактам 01–06 (этап, статусы матрицы,
-          согласование Оркестратора, красные строки, решение протокола,
-          релиз, следующий шаг).
+          согласование Оркестратора, код ревью, красные строки, решение
+          протокола, релиз, следующий шаг).
 check   — механическая проверка DoD-гейтов (exit 1 при ERR). Каталог задачи —
           обычно docs/delivery/<ID-задачи> проекта.
 roadmap — сводка всех задач и эпиков каталога доставки (обычно docs/delivery):
