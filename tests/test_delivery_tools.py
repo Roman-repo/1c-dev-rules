@@ -188,7 +188,7 @@ class TestStatusCommand(unittest.TestCase):
         code, out = run_cli("status", FIXTURES / "deferred" / "TASK-D1")
         self.assertEqual(code, 0)
         self.assertIn("TASK-D1", out)
-        self.assertIn('6 «Внешняя приёмка»', out)
+        self.assertIn('7 «Внешняя приёмка»', out)
         self.assertIn("Отложено", out)
         self.assertIn("статич. 3", out)          # все три критерия — статич. + ⏳
         self.assertIn("1.0.0-draft", out)
@@ -201,9 +201,10 @@ class TestStatusCommand(unittest.TestCase):
     def test_accepted_reaches_release_stage(self):
         code, out = run_cli("status", FIXTURES / "accepted" / "TASK-A1")
         self.assertEqual(code, 0)
-        self.assertIn('7 «Релиз»', out)
+        self.assertIn('8 «Релиз»', out)
         self.assertIn("Принято", out)
         self.assertIn("1.0.0", out)
+        self.assertIn("Код ревью: ✅ Одобрено, 2026-01-02 (режим manual; 05a)", out)
 
     def test_early_task_points_to_design(self):
         code, out = run_cli("status", FIXTURES / "early" / "TASK-E1")
@@ -301,12 +302,14 @@ class TestCheckCommand(unittest.TestCase):
         # гейт 2→3: пустая ячейка + строк меньше, чем критериев
         self.assertIn("пустая ячейка «Объект/код»", out)
         self.assertIn("меньше, чем критериев успеха", out)
-        # гейт 3→4: входные проверки с ❌
+        # гейт 4→5: входные проверки с ❌
         self.assertIn("Входные проверки разработки» содержит ❌", out)
-        # гейт 4→5: красная строка и вердикт
+        # гейт 5→6: красная строка и вердикт
         self.assertIn("красная строка 05", out)
         self.assertIn("вердикт 05 не завершён", out)
-        # гейт 5→6: возврат без листа 06a
+        # гейт 6→7: «Доработать» при начатой внешней приёмке
+        self.assertIn("внешняя приёмка начата при решении ревью «Доработать»", out)
+        # гейт 7→8: возврат без листа 06a
         self.assertIn("решение «Возврат» — гейт не пройден", out)
         self.assertIn("06a-rework-list.md не найден", out)
 
@@ -454,6 +457,170 @@ class TestOrchestratorApproval(unittest.TestCase):
             code, out = run_cli("check", task)
         self.assertEqual(code, 0)
         self.assertIn("пакет 02/03/04 согласован (2026-08-23, режим auto; 04a)", out)
+
+
+class TestCodeReviewStage(unittest.TestCase):
+    """Этап 6 «Код ревью» (0.23.0): решение Ревьюера после внутренней приёмки.
+
+    Источник — артефакт 05a «Лист код-ревью». Строка «code-review ✅» в шапке
+    05 источником НЕ является — это самопрогон разработки (гейт 4→5), не
+    решение Ревьюера. Отсутствие ревью — WARN, не ERR (задачи, начатые до
+    введения этапа). «Доработать» при начатой внешней приёмке — ERR."""
+
+    BRIEF = (
+        "# Карточка задачи — TASK-T1: Сделать что-то\n\n"
+        "## Критерии успеха\n\n| № | Критерий | Как проверим |\n|---|---|---|\n| 1 | к | п |\n\n"
+        "## Подтверждение инициатора\n\n- [x] цель подтверждена\n"
+    )
+    MATRIX = (
+        "## Матрица трассировки и критерии приёмки\n\n"
+        "| № | Критерий (проверяемо) | Шаг сценария | Объект/код (03) | Проверка | Статус 05 | Статус 06 |\n"
+        "|---|---|---|---|---|---|---|\n"
+        "| 1 | критерий | 1 | форма | ручная | ☐ | ☐ |\n\n"
+    )
+    APPROVAL = (
+        "# Лист замечаний согласования — TASK-T1\n\n"
+        "## Решение\n\n"
+        "- [x] **Согласовано** — пакет принят\n"
+        "- [ ] **Доработать** — замечания\n\n"
+        "**Режим согласования:** manual\n**Дата:** 2026-08-23\n"
+    )
+    INTERNAL = (
+        "# Отчёт внутренней приёмки — TASK-T1\n\n"
+        "- **Входные проверки разработки:** thin-triggers ✅, code-review ✅\n\n"
+        "## Вердикт\n\n- [x] готово\n"
+    )
+    REVIEW_OK = (
+        "# Лист код-ревью — TASK-T1\n\n"
+        "## Решение\n\n"
+        "- [x] **Одобрено** — код прошёл ревью\n"
+        "- [ ] **Доработать** — замечания\n\n"
+        "**Режим ревью:** manual\n**Ревьюер:** Тест\n**Дата:** 2026-08-24\n"
+    )
+    REVIEW_REWORK = (
+        "# Лист код-ревью — TASK-T1\n\n"
+        "## Решение\n\n"
+        "- [ ] **Одобрено** — код прошёл ревью\n"
+        "- [x] **Доработать** — замечания\n\n"
+        "**Режим ревью:** manual\n**Ревьюер:** Тест\n**Дата:** 2026-08-24\n"
+    )
+    PROTOCOL = (
+        "# Протокол приёмки — TASK-T1\n\n"
+        "## Решение\n\n- [x] **Принято** — ок\n"
+    )
+
+    def make_task(self, tmp: str, review: str = "", protocol: str = "",
+                  mode: str = None) -> Path:
+        root = Path(tmp) / "delivery"
+        task = root / "TASK-T1"
+        task.mkdir(parents=True)
+        (task / "01-task-brief.md").write_text(self.BRIEF, encoding="utf-8")
+        (task / "02-execution-scenario.md").write_text("# С\n", encoding="utf-8")
+        (task / "03-change-spec.md").write_text("# Сп\n", encoding="utf-8")
+        (task / "04-acceptance-criteria.md").write_text("# К\n\n" + self.MATRIX, encoding="utf-8")
+        (task / "04a-design-review.md").write_text(self.APPROVAL, encoding="utf-8")
+        (task / "05-internal-acceptance.md").write_text(self.INTERNAL, encoding="utf-8")
+        if review:
+            (task / "05a-code-review.md").write_text(review, encoding="utf-8")
+        if protocol:
+            (task / "06-acceptance-protocol.md").write_text(protocol, encoding="utf-8")
+        if mode is not None:
+            (root / "_conveyor-mode.md").write_text(
+                f"<!-- Режим конвейера -->\nmode: {mode}\nupdated: 2026-08-24\n", encoding="utf-8")
+        return task
+
+    def test_approved_review_opens_external_acceptance(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            task = self.make_task(tmp, self.REVIEW_OK)
+            code, out = run_cli("check", task)
+            self.assertEqual(code, 0)
+            self.assertIn("код прошёл ревью (2026-08-24, режим manual; 05a)", out)
+            self.assertIn("ERR 0", out)
+            code, out = run_cli("status", task)
+            self.assertEqual(code, 0)
+            self.assertIn("Код ревью: ✅ Одобрено, 2026-08-24 (режим manual; 05a)", out)
+            self.assertIn('6 «Код ревью»', out)                                 # этап по 05a
+            self.assertIn("внешняя приёмка (1c-external-acceptance)", out)      # следующий шаг
+
+    def test_missing_review_is_warn_and_next_step(self):
+        """Задачи до 0.23.0: 05a нет → WARN; следующий шаг — ревью, не внешняя приёмка."""
+        with tempfile.TemporaryDirectory() as tmp:
+            task = self.make_task(tmp)
+            code, out = run_cli("check", task)
+            self.assertEqual(code, 0)
+            self.assertIn("нет код ревью — лист 05a-code-review.md не найден", out)
+            self.assertIn("ERR 0", out)
+            code, out = run_cli("status", task)
+            self.assertEqual(code, 0)
+            self.assertIn("Код ревью: нет листа 05a (этап 6", out)
+            self.assertIn("код ревью (1c-code-review, этап 6)", out)
+            self.assertNotIn("внешняя приёмка (1c-external-acceptance)", out)
+
+    def test_selfrun_in_05_header_is_not_review(self):
+        """«code-review ✅» в шапке 05 — самопрогон разработки, не решение
+        Ревьюера: без 05a остаётся WARN (0.23.0)."""
+        with tempfile.TemporaryDirectory() as tmp:
+            task = self.make_task(tmp)   # INTERNAL уже содержит code-review ✅
+            code, out = run_cli("check", task)
+        self.assertEqual(code, 0)
+        self.assertIn("нет код ревью — лист 05a-code-review.md не найден", out)
+
+    def test_rework_decision_with_protocol_is_err(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            task = self.make_task(tmp, self.REVIEW_REWORK, protocol=self.PROTOCOL)
+            code, out = run_cli("check", task)
+        self.assertEqual(code, 1)
+        self.assertIn("внешняя приёмка начата при решении ревью «Доработать»", out)
+        with tempfile.TemporaryDirectory() as tmp:
+            task = self.make_task(tmp, self.REVIEW_REWORK)      # протокола ещё нет
+            code, out = run_cli("check", task)
+        self.assertEqual(code, 0)
+        self.assertIn("без внешней приёмки до повторного ревью", out)
+
+    def test_undecided_and_double_marked(self):
+        undecided = self.REVIEW_OK.replace("- [x] **Одобрено**", "- [ ] **Одобрено**")
+        with tempfile.TemporaryDirectory() as tmp:
+            task = self.make_task(tmp, undecided)
+            code, out = run_cli("check", task)
+        self.assertEqual(code, 0)
+        self.assertIn("решение ревью в 05a не отмечено (Одобрено / Доработать)", out)
+        double = self.REVIEW_OK.replace("- [ ] **Доработать**", "- [x] **Доработать**")  # оба отмечены
+        with tempfile.TemporaryDirectory() as tmp:
+            task = self.make_task(tmp, double)
+            code, out = run_cli("check", task)
+        self.assertEqual(code, 1)
+        self.assertIn("несколько решений ревью", out)
+
+    def test_review_without_date_is_warn(self):
+        no_date = self.REVIEW_OK.replace("**Дата:** 2026-08-24\n", "")
+        with tempfile.TemporaryDirectory() as tmp:
+            task = self.make_task(tmp, no_date)
+            code, out = run_cli("check", task)
+        self.assertEqual(code, 0)
+        self.assertIn("ревью без даты в 05a", out)
+
+    def test_mode_file_and_stamp_mode(self):
+        no_stamp_mode = self.REVIEW_OK.replace("**Режим ревью:** manual\n", "")
+        with tempfile.TemporaryDirectory() as tmp:
+            task = self.make_task(tmp, no_stamp_mode, mode="auto")
+            self.assertEqual(dt.read_conveyor_mode(task), "auto")
+            code, out = run_cli("check", task)
+            self.assertIn("код прошёл ревью (2026-08-24, режим auto; 05a)", out)
+        review_auto = self.REVIEW_OK.replace("manual", "auto")
+        with tempfile.TemporaryDirectory() as tmp:
+            task = self.make_task(tmp, review_auto, mode="manual")
+            code, out = run_cli("check", task)
+        self.assertEqual(code, 0)
+        self.assertIn("код прошёл ревью (2026-08-24, режим auto; 05a)", out)   # пометка в 05a сильнее
+
+    def test_stage_ladder_with_review(self):
+        """stage_reached (0.23.0): 05a→6; протокол→7; «принято»→8."""
+        with tempfile.TemporaryDirectory() as tmp:
+            state = dt.load_state(self.make_task(tmp, self.REVIEW_OK))
+            self.assertEqual(dt.stage_reached(state), 6)
+        with tempfile.TemporaryDirectory() as tmp:
+            state = dt.load_state(self.make_task(tmp, self.REVIEW_OK, protocol=self.PROTOCOL))
+            self.assertEqual(dt.stage_reached(state), 8)   # «Принято» сразу закрывает лестницу
 
 
 if __name__ == "__main__":

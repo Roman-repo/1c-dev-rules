@@ -24,6 +24,11 @@ jobs:
       - name: Run validate_skills.py
         run: python3 scripts/validate_skills.py
 
-      # 2. Юнит-тесты самого валидатора (fixtures + интеграция на skills/).
-      - name: Run validator tests
-        run: python3 -m unittest tests.test_validate_skills -v
+      # 2. Синхронность версии во всех манифестах и README (страховка от
+      #    ручных правок мимо bump-version.sh).
+      - name: Check version sync
+        run: python3 scripts/check_version_sync.py
+
+      # 3. Все юнит-тесты (валидатор скилов + delivery_tools + bash-скрипты).
+      - name: Run all tests
+        run: python3 -m unittest discover tests -v
