@@ -32,6 +32,9 @@ from typing import Dict, List, Optional, Tuple
 
 DESC_HARD_LIMIT = 1024          # ZCode: хард-лимит длины description
 DESC_SOFT_LIMIT = 250           # рекомендация: главное — в первых ~250 симв
+# DESC_SOFT_LIMIT — эмпирическая граница обрезки description в system-reminder
+# ZCode (см. docs/ARCHITECTURE.md, «Триггеры скилов»); из плагина не настраивается.
+# Перепроверять при мажорных обновлениях клиента — поднимать вместе с окном.
 BODY_LINE_LIMIT = 500           # тело SKILL.md
 REQUIRED_FIELDS = ("name", "description", "license")
 NAME_PREFIX = "1c-"
