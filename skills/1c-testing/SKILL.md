@@ -1,6 +1,6 @@
 ---
 name: 1c-testing
-description: Тестирование кода 1С: unit-тесты на YaXUnit и BDD на Vanessa Automation. Use when writing/reviewing tests — шаблоны Тест<Функция>_<Сценарий>, Gherkin (Дано/Когда/Тогда), цели покрытия, типология кейсов (happy/edge/error/boundary). Триггеры: ЮТест, TDD, Функционал:, Сценарий:, покрытие кода, unit test, приёмочный тест.
+description: Тестирование кода 1С: unit-тесты на YaXUnit, BDD на Vanessa Automation. Use when: пишу или ревьюлю тесты. Триггеры: ЮТест, TDD, Gherkin, Дано/Когда/Тогда, Функционал:, Сценарий:, покрытие кода, приёмочный тест. Шаблон Тест<Функция>_<Сценарий>.
 when_to_use: >
   При написании или ревью тестов для кода 1С. Триггеры: "тест", "test",
   "тестирование", "Vanessa", "Vanessa Automation", "YaXUnit", "ЮТест",
