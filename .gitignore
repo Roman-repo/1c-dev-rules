@@ -16,3 +16,6 @@ __pycache__/
 .zcode/plans/
 .zcode/cache/
 .zcode-plugin-seed.json
+
+# Local tools (jar bsl-language-server для scripts/bsl_ls_analyze.py)
+.tools/

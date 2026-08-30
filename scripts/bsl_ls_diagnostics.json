@@ -1,0 +1,1122 @@
+{
+ "source": "https://1c-syntax.github.io/bsl-language-server/diagnostics/",
+ "count": 186,
+ "diagnostics": {
+  "AllFunctionPathMustHaveReturn": {
+   "title": "Все возможные пути выполнения функции должны содержать оператор Возврат",
+   "enabled": true,
+   "importance": "Важный",
+   "kind": "Дефект кода"
+  },
+  "AssignAliasFieldsInQuery": {
+   "title": "Назначение псевдонимов выбранным полям в запросе",
+   "enabled": true,
+   "importance": "Важный",
+   "kind": "Дефект кода"
+  },
+  "AssignToReadOnlyProperty": {
+   "title": "Присвоение значения свойству, доступному только для чтения",
+   "enabled": true,
+   "importance": "Важный",
+   "kind": "Ошибка"
+  },
+  "BadExceptionCategory": {
+   "title": "Недопустимая категория исключений",
+   "enabled": true,
+   "importance": "Информационный",
+   "kind": "Дефект кода"
+  },
+  "BadWords": {
+   "title": "Запрещенные слова",
+   "enabled": false,
+   "importance": "Важный",
+   "kind": "Дефект кода"
+  },
+  "BeginTransactionBeforeTryCatch": {
+   "title": "Нарушение правил работы с транзакциями для метода 'НачатьТранзакцию'",
+   "enabled": true,
+   "importance": "Важный",
+   "kind": "Ошибка"
+  },
+  "CachedPublic": {
+   "title": "Кеширование программного интерфейса",
+   "enabled": true,
+   "importance": "Важный",
+   "kind": "Дефект кода"
+  },
+  "CanonicalSpellingKeywords": {
+   "title": "Каноническое написание ключевых слов",
+   "enabled": true,
+   "importance": "Информационный",
+   "kind": "Дефект кода"
+  },
+  "CodeAfterAsyncCall": {
+   "title": "После вызова асинхронного метода есть строки кода",
+   "enabled": false,
+   "importance": "Важный",
+   "kind": "Дефект кода"
+  },
+  "CodeBlockBeforeSub": {
+   "title": "Определения методов должны размещаться перед операторами тела модуля",
+   "enabled": true,
+   "importance": "Блокирующий",
+   "kind": "Ошибка"
+  },
+  "CodeOutOfRegion": {
+   "title": "Код расположен вне области",
+   "enabled": true,
+   "importance": "Информационный",
+   "kind": "Дефект кода"
+  },
+  "CognitiveComplexity": {
+   "title": "Когнитивная сложность",
+   "enabled": true,
+   "importance": "Критичный",
+   "kind": "Дефект кода"
+  },
+  "CommandModuleExportMethods": {
+   "title": "Экспортные методы в модулях команд и общих команд",
+   "enabled": true,
+   "importance": "Информационный",
+   "kind": "Дефект кода"
+  },
+  "CommentedCode": {
+   "title": "Закомментированный фрагмент кода",
+   "enabled": true,
+   "importance": "Незначительный",
+   "kind": "Дефект кода"
+  },
+  "CommitTransactionOutsideTryCatch": {
+   "title": "Нарушение правил работы с транзакциями для метода 'ЗафиксироватьТранзакцию'",
+   "enabled": true,
+   "importance": "Важный",
+   "kind": "Ошибка"
+  },
+  "CommonModuleAssign": {
+   "title": "Присвоение общему модулю",
+   "enabled": true,
+   "importance": "Блокирующий",
+   "kind": "Ошибка"
+  },
+  "CommonModuleInvalidType": {
+   "title": "Общий модуль недопустимого типа",
+   "enabled": true,
+   "importance": "Важный",
+   "kind": "Ошибка"
+  },
+  "CommonModuleMissingAPI": {
+   "title": "Общий модуль должен иметь программный интерфейс",
+   "enabled": true,
+   "importance": "Незначительный",
+   "kind": "Дефект кода"
+  },
+  "CommonModuleNameCached": {
+   "title": "Пропущен постфикс \"ПовтИсп\"",
+   "enabled": true,
+   "importance": "Важный",
+   "kind": "Дефект кода"
+  },
+  "CommonModuleNameClient": {
+   "title": "Пропущен постфикс \"Клиент\"",
+   "enabled": true,
+   "importance": "Незначительный",
+   "kind": "Дефект кода"
+  },
+  "CommonModuleNameClientServer": {
+   "title": "Пропущен постфикс \"КлиентСервер\"",
+   "enabled": true,
+   "importance": "Важный",
+   "kind": "Дефект кода"
+  },
+  "CommonModuleNameFullAccess": {
+   "title": "Пропущен постфикс \"ПолныеПрава\"",
+   "enabled": true,
+   "importance": "Важный",
+   "kind": "Потенциальная уязвимость"
+  },
+  "CommonModuleNameGlobal": {
+   "title": "Пропущен постфикс \"Глобальный\"",
+   "enabled": true,
+   "importance": "Важный",
+   "kind": "Дефект кода"
+  },
+  "CommonModuleNameGlobalClient": {
+   "title": "Глобальный модуль с постфиксом \"Клиент\"",
+   "enabled": true,
+   "importance": "Важный",
+   "kind": "Дефект кода"
+  },
+  "CommonModuleNameServerCall": {
+   "title": "Пропущен постфикс \"ВызовСервера\"",
+   "enabled": true,
+   "importance": "Незначительный",
+   "kind": "Дефект кода"
+  },
+  "CommonModuleNameWords": {
+   "title": "Нерекомендуемое имя общего модуля",
+   "enabled": true,
+   "importance": "Информационный",
+   "kind": "Дефект кода"
+  },
+  "CommonModuleVariables": {
+   "title": "Объявление переменных в общем модуле",
+   "enabled": true,
+   "importance": "Критичный",
+   "kind": "Ошибка"
+  },
+  "CompareWithBoolean": {
+   "title": "Сравнение с булевой константой",
+   "enabled": true,
+   "importance": "Незначительный",
+   "kind": "Дефект кода"
+  },
+  "CompilationDirectiveLost": {
+   "title": "Директивы компиляции методов",
+   "enabled": true,
+   "importance": "Важный",
+   "kind": "Дефект кода"
+  },
+  "CompilationDirectiveNeedLess": {
+   "title": "Лишняя директива компиляции",
+   "enabled": true,
+   "importance": "Важный",
+   "kind": "Дефект кода"
+  },
+  "ConsecutiveEmptyLines": {
+   "title": "Подряд идущие пустые строки",
+   "enabled": true,
+   "importance": "Информационный",
+   "kind": "Дефект кода"
+  },
+  "CrazyMultilineString": {
+   "title": "Безумные многострочные литералы",
+   "enabled": true,
+   "importance": "Важный",
+   "kind": "Дефект кода"
+  },
+  "CreateQueryInCycle": {
+   "title": "Выполнение запроса в цикле",
+   "enabled": true,
+   "importance": "Критичный",
+   "kind": "Ошибка"
+  },
+  "CyclomaticComplexity": {
+   "title": "Цикломатическая сложность",
+   "enabled": true,
+   "importance": "Критичный",
+   "kind": "Дефект кода"
+  },
+  "DataExchangeLoading": {
+   "title": "Отсутствует проверка признака ОбменДанными.Загрузка в обработчике событий объекта",
+   "enabled": true,
+   "importance": "Критичный",
+   "kind": "Ошибка"
+  },
+  "DeletingCollectionItem": {
+   "title": "Удаление элемента при обходе коллекции посредством оператора \"Для каждого ... Из ... Цикл\"",
+   "enabled": true,
+   "importance": "Важный",
+   "kind": "Ошибка"
+  },
+  "DenyIncompleteValues": {
+   "title": "Запрет незаполненных значений у измерений регистров",
+   "enabled": false,
+   "importance": "Важный",
+   "kind": "Дефект кода"
+  },
+  "DeprecatedAttributes8312": {
+   "title": "Устаревшие объекты платформы 8.3.12",
+   "enabled": true,
+   "importance": "Информационный",
+   "kind": "Дефект кода"
+  },
+  "DeprecatedCurrentDate": {
+   "title": "Использование устаревшего метода \"ТекущаяДата\"",
+   "enabled": true,
+   "importance": "Важный",
+   "kind": "Ошибка"
+  },
+  "DeprecatedFind": {
+   "title": "Использование устаревшего метода \"Найти\"",
+   "enabled": true,
+   "importance": "Незначительный",
+   "kind": "Дефект кода"
+  },
+  "DeprecatedMessage": {
+   "title": "Ограничение на использование устаревшего метода \"Сообщить\"",
+   "enabled": true,
+   "importance": "Незначительный",
+   "kind": "Дефект кода"
+  },
+  "DeprecatedMethodCall": {
+   "title": "Устаревшие методы не должны использоваться",
+   "enabled": true,
+   "importance": "Незначительный",
+   "kind": "Дефект кода"
+  },
+  "DeprecatedTypeManagedForm": {
+   "title": "Устаревшее использование типа \"УправляемаяФорма\"",
+   "enabled": true,
+   "importance": "Информационный",
+   "kind": "Дефект кода"
+  },
+  "DisableSafeMode": {
+   "title": "Отключение безопасного режима",
+   "enabled": true,
+   "importance": "Важный",
+   "kind": "Уязвимость"
+  },
+  "DoubleNegatives": {
+   "title": "Двойные отрицания",
+   "enabled": true,
+   "importance": "Важный",
+   "kind": "Дефект кода"
+  },
+  "DuplicateRegion": {
+   "title": "Повторяющиеся разделы модуля",
+   "enabled": true,
+   "importance": "Информационный",
+   "kind": "Дефект кода"
+  },
+  "DuplicateStringLiteral": {
+   "title": "Повторное использование строкового литерала",
+   "enabled": true,
+   "importance": "Незначительный",
+   "kind": "Дефект кода"
+  },
+  "DuplicatedInsertionIntoCollection": {
+   "title": "Повторное добавление/вставка значений в коллекцию",
+   "enabled": true,
+   "importance": "Важный",
+   "kind": "Дефект кода"
+  },
+  "EmptyCodeBlock": {
+   "title": "Пустой блок кода",
+   "enabled": true,
+   "importance": "Важный",
+   "kind": "Дефект кода"
+  },
+  "EmptyRegion": {
+   "title": "Область не должна быть пустой",
+   "enabled": true,
+   "importance": "Информационный",
+   "kind": "Дефект кода"
+  },
+  "EmptyStatement": {
+   "title": "Пустой оператор",
+   "enabled": true,
+   "importance": "Информационный",
+   "kind": "Дефект кода"
+  },
+  "EventHandlerInvalidSignature": {
+   "title": "Несоответствие сигнатуры обработчика события",
+   "enabled": true,
+   "importance": "Важный",
+   "kind": "Ошибка"
+  },
+  "EventHandlerOutsideEventRegion": {
+   "title": "Обработчик события вне стандартной области",
+   "enabled": true,
+   "importance": "Информационный",
+   "kind": "Дефект кода"
+  },
+  "ExcessiveAutoTestCheck": {
+   "title": "Избыточная проверка параметра АвтоТест",
+   "enabled": true,
+   "importance": "Незначительный",
+   "kind": "Дефект кода"
+  },
+  "ExecuteExternalCode": {
+   "title": "Выполнение произвольного кода на сервере",
+   "enabled": true,
+   "importance": "Критичный",
+   "kind": "Уязвимость"
+  },
+  "ExecuteExternalCodeInCommonModule": {
+   "title": "Выполнение произвольного кода в общем модуле на сервере",
+   "enabled": true,
+   "importance": "Критичный",
+   "kind": "Потенциальная уязвимость"
+  },
+  "ExportVariables": {
+   "title": "Запрет экспортных глобальных переменных модуля",
+   "enabled": true,
+   "importance": "Важный",
+   "kind": "Дефект кода"
+  },
+  "ExternalAppStarting": {
+   "title": "Запуск внешних приложений",
+   "enabled": true,
+   "importance": "Важный",
+   "kind": "Потенциальная уязвимость"
+  },
+  "ExtraCommas": {
+   "title": "Запятые без указания параметра в конце вызова метода",
+   "enabled": true,
+   "importance": "Важный",
+   "kind": "Дефект кода"
+  },
+  "FieldsFromJoinsWithoutIsNull": {
+   "title": "Отсутствие проверки на NULL для полей из присоединяемых таблиц",
+   "enabled": false,
+   "importance": "Критичный",
+   "kind": "Ошибка"
+  },
+  "FileSystemAccess": {
+   "title": "Доступ к файловой системе",
+   "enabled": false,
+   "importance": "Важный",
+   "kind": "Уязвимость"
+  },
+  "ForbiddenMetadataName": {
+   "title": "Объекту метаданных присвоено запрещенное имя",
+   "enabled": true,
+   "importance": "Блокирующий",
+   "kind": "Ошибка"
+  },
+  "FormDataToValue": {
+   "title": "Использование метода ДанныеФормыВЗначение",
+   "enabled": true,
+   "importance": "Информационный",
+   "kind": "Дефект кода"
+  },
+  "FullOuterJoinQuery": {
+   "title": "Использование конструкции \"ПОЛНОЕ ВНЕШНЕЕ СОЕДИНЕНИЕ\" в запросах",
+   "enabled": true,
+   "importance": "Важный",
+   "kind": "Дефект кода"
+  },
+  "FunctionNameStartsWithGet": {
+   "title": "Имя функции не должно начинаться с \"Получить\"",
+   "enabled": false,
+   "importance": "Информационный",
+   "kind": "Дефект кода"
+  },
+  "FunctionOutParameter": {
+   "title": "Исходящий параметр функции",
+   "enabled": false,
+   "importance": "Важный",
+   "kind": "Дефект кода"
+  },
+  "FunctionReturnsSamePrimitive": {
+   "title": "Функция всегда возвращает одно и то же примитивное значение",
+   "enabled": true,
+   "importance": "Важный",
+   "kind": "Ошибка"
+  },
+  "FunctionShouldHaveReturn": {
+   "title": "Функция должна содержать возврат",
+   "enabled": true,
+   "importance": "Важный",
+   "kind": "Ошибка"
+  },
+  "GetFormMethod": {
+   "title": "Использование метода ПолучитьФорму",
+   "enabled": true,
+   "importance": "Важный",
+   "kind": "Ошибка"
+  },
+  "GlobalContextMethodCollision8312": {
+   "title": "Конфликт имен методов с методами глобального контекста",
+   "enabled": true,
+   "importance": "Блокирующий",
+   "kind": "Ошибка"
+  },
+  "IdenticalExpressions": {
+   "title": "Одинаковые выражения слева и справа от \"foo\" оператора",
+   "enabled": true,
+   "importance": "Важный",
+   "kind": "Ошибка"
+  },
+  "IfConditionComplexity": {
+   "title": "Использование сложных выражений в условии оператора \"Если\"",
+   "enabled": true,
+   "importance": "Незначительный",
+   "kind": "Дефект кода"
+  },
+  "IfElseDuplicatedCodeBlock": {
+   "title": "Повторяющиеся блоки кода в синтаксической конструкции Если...Тогда...ИначеЕсли...",
+   "enabled": true,
+   "importance": "Незначительный",
+   "kind": "Дефект кода"
+  },
+  "IfElseDuplicatedCondition": {
+   "title": "Повторяющиеся условия в синтаксической конструкции Если...Тогда...ИначеЕсли...",
+   "enabled": true,
+   "importance": "Важный",
+   "kind": "Дефект кода"
+  },
+  "IfElseIfEndsWithElse": {
+   "title": "Использование синтаксической конструкции Если...Тогда...ИначеЕсли...",
+   "enabled": true,
+   "importance": "Важный",
+   "kind": "Дефект кода"
+  },
+  "IncorrectLineBreak": {
+   "title": "Неправильный перенос выражения",
+   "enabled": true,
+   "importance": "Информационный",
+   "kind": "Дефект кода"
+  },
+  "IncorrectUseLikeInQuery": {
+   "title": "Некорректное использование 'ПОДОБНО'",
+   "enabled": true,
+   "importance": "Важный",
+   "kind": "Ошибка"
+  },
+  "IncorrectUseOfStrTemplate": {
+   "title": "Неверное использование \"СтрШаблон\"",
+   "enabled": true,
+   "importance": "Блокирующий",
+   "kind": "Ошибка"
+  },
+  "InternetAccess": {
+   "title": "Обращение к Интернет-ресурсам",
+   "enabled": false,
+   "importance": "Важный",
+   "kind": "Уязвимость"
+  },
+  "InvalidCharacterInFile": {
+   "title": "Недопустимый символ",
+   "enabled": true,
+   "importance": "Важный",
+   "kind": "Ошибка"
+  },
+  "IsInRoleMethod": {
+   "title": "Использование метода РольДоступна",
+   "enabled": true,
+   "importance": "Важный",
+   "kind": "Дефект кода"
+  },
+  "JoinWithSubQuery": {
+   "title": "Соединение с вложенными запросами",
+   "enabled": true,
+   "importance": "Важный",
+   "kind": "Дефект кода"
+  },
+  "JoinWithVirtualTable": {
+   "title": "Соединение с виртуальными таблицами",
+   "enabled": true,
+   "importance": "Важный",
+   "kind": "Дефект кода"
+  },
+  "LatinAndCyrillicSymbolInWord": {
+   "title": "Смешивание латинских и кириллических символов в одном идентификаторе",
+   "enabled": true,
+   "importance": "Незначительный",
+   "kind": "Дефект кода"
+  },
+  "LineLength": {
+   "title": "Ограничение на длину строки",
+   "enabled": true,
+   "importance": "Незначительный",
+   "kind": "Дефект кода"
+  },
+  "LogicalOrInJoinQuerySection": {
+   "title": "Логическое 'ИЛИ' в соединениях запроса",
+   "enabled": true,
+   "importance": "Важный",
+   "kind": "Дефект кода"
+  },
+  "LogicalOrInTheWhereSectionOfQuery": {
+   "title": "Использование логического \"ИЛИ\" в секции \"ГДЕ\" запроса",
+   "enabled": true,
+   "importance": "Важный",
+   "kind": "Дефект кода"
+  },
+  "MagicDate": {
+   "title": "Магические даты",
+   "enabled": true,
+   "importance": "Незначительный",
+   "kind": "Дефект кода"
+  },
+  "MagicNumber": {
+   "title": "Магические числа",
+   "enabled": true,
+   "importance": "Незначительный",
+   "kind": "Дефект кода"
+  },
+  "MetadataObjectNameLength": {
+   "title": "Имена объектов метаданных не должны превышать допустимой длины наименования",
+   "enabled": true,
+   "importance": "Важный",
+   "kind": "Ошибка"
+  },
+  "MethodSize": {
+   "title": "Ограничение на размер метода",
+   "enabled": true,
+   "importance": "Важный",
+   "kind": "Дефект кода"
+  },
+  "MissedRequiredParameter": {
+   "title": "Пропущен обязательный параметр метода",
+   "enabled": true,
+   "importance": "Важный",
+   "kind": "Ошибка"
+  },
+  "MissingCodeTryCatchEx": {
+   "title": "Конструкция \"Попытка...Исключение...КонецПопытки\" не содержит кода в исключении",
+   "enabled": true,
+   "importance": "Важный",
+   "kind": "Ошибка"
+  },
+  "MissingCommonModuleMethod": {
+   "title": "Обращение к отсутствующему методу общего модуля",
+   "enabled": true,
+   "importance": "Блокирующий",
+   "kind": "Ошибка"
+  },
+  "MissingEventSubscriptionHandler": {
+   "title": "Отсутствует обработчик подписки на событие",
+   "enabled": true,
+   "importance": "Блокирующий",
+   "kind": "Ошибка"
+  },
+  "MissingParameterDescription": {
+   "title": "Отсутствует описание параметров метода",
+   "enabled": true,
+   "importance": "Важный",
+   "kind": "Дефект кода"
+  },
+  "MissingReturnedValueDescription": {
+   "title": "Отсутствует описание возвращаемого значения функции",
+   "enabled": true,
+   "importance": "Важный",
+   "kind": "Дефект кода"
+  },
+  "MissingSpace": {
+   "title": "Пропущены пробелы слева или справа от операторов + - * / = % &lt; &gt; &lt;&gt; &lt;= &gt;=, от ключевых слов, а так же справа от , и ;",
+   "enabled": true,
+   "importance": "Информационный",
+   "kind": "Дефект кода"
+  },
+  "MissingTempStorageDeletion": {
+   "title": "Отсутствует удаление данных из временного хранилища после использования",
+   "enabled": false,
+   "importance": "Критичный",
+   "kind": "Дефект кода"
+  },
+  "MissingTemporaryFileDeletion": {
+   "title": "Отсутствует удаление временного файла после использования",
+   "enabled": true,
+   "importance": "Важный",
+   "kind": "Ошибка"
+  },
+  "MissingVariablesDescription": {
+   "title": "Все объявления переменных должны иметь описание",
+   "enabled": true,
+   "importance": "Незначительный",
+   "kind": "Дефект кода"
+  },
+  "MultilineStringInQuery": {
+   "title": "Многострочный литерал в запросе",
+   "enabled": true,
+   "importance": "Критичный",
+   "kind": "Ошибка"
+  },
+  "MultilingualStringHasAllDeclaredLanguages": {
+   "title": "Есть локализованный текст для всех заявленных в конфигурации языков",
+   "enabled": true,
+   "importance": "Незначительный",
+   "kind": "Ошибка"
+  },
+  "MultilingualStringUsingWithTemplate": {
+   "title": "Частично локализованный текст используется в функции СтрШаблон",
+   "enabled": true,
+   "importance": "Важный",
+   "kind": "Ошибка"
+  },
+  "NestedConstructorsInStructureDeclaration": {
+   "title": "Использование конструкторов с параметрами при объявлении структуры",
+   "enabled": true,
+   "importance": "Незначительный",
+   "kind": "Дефект кода"
+  },
+  "NestedFunctionInParameters": {
+   "title": "Инициализация параметров методов и конструкторов вызовом вложенных методов",
+   "enabled": true,
+   "importance": "Незначительный",
+   "kind": "Дефект кода"
+  },
+  "NestedStatements": {
+   "title": "Управляющие конструкции не должны быть вложены слишком глубоко",
+   "enabled": true,
+   "importance": "Критичный",
+   "kind": "Дефект кода"
+  },
+  "NestedTernaryOperator": {
+   "title": "Вложенный тернарный оператор",
+   "enabled": true,
+   "importance": "Важный",
+   "kind": "Дефект кода"
+  },
+  "NonExportMethodsInApiRegion": {
+   "title": "Неэкспортные методы в областях ПрограммныйИнтерфейс и СлужебныйПрограммныйИнтерфейс",
+   "enabled": true,
+   "importance": "Важный",
+   "kind": "Дефект кода"
+  },
+  "NonStandardRegion": {
+   "title": "Нестандартные разделы модуля",
+   "enabled": true,
+   "importance": "Информационный",
+   "kind": "Дефект кода"
+  },
+  "NumberOfOptionalParams": {
+   "title": "Ограничение на количество не обязательных параметров метода",
+   "enabled": true,
+   "importance": "Незначительный",
+   "kind": "Дефект кода"
+  },
+  "NumberOfParams": {
+   "title": "Ограничение на количество параметров метода",
+   "enabled": true,
+   "importance": "Незначительный",
+   "kind": "Дефект кода"
+  },
+  "NumberOfValuesInStructureConstructor": {
+   "title": "Ограничение на количество значений свойств, передаваемых в конструктор структуры",
+   "enabled": true,
+   "importance": "Незначительный",
+   "kind": "Дефект кода"
+  },
+  "OSUsersMethod": {
+   "title": "Использование метода ПользователиОС",
+   "enabled": true,
+   "importance": "Критичный",
+   "kind": "Потенциальная уязвимость"
+  },
+  "OneStatementPerLine": {
+   "title": "Одно выражение в одной строке",
+   "enabled": true,
+   "importance": "Незначительный",
+   "kind": "Дефект кода"
+  },
+  "OrderOfParams": {
+   "title": "Порядок параметров метода",
+   "enabled": true,
+   "importance": "Важный",
+   "kind": "Дефект кода"
+  },
+  "OrdinaryAppSupport": {
+   "title": "Поддержка обычного приложения",
+   "enabled": true,
+   "importance": "Важный",
+   "kind": "Дефект кода"
+  },
+  "PairingBrokenTransaction": {
+   "title": "Нарушение парности использования методов \"НачатьТранзакцию()\" и \"ЗафиксироватьТранзакцию()\" / \"ОтменитьТранзакцию()\"",
+   "enabled": true,
+   "importance": "Важный",
+   "kind": "Ошибка"
+  },
+  "ParseError": {
+   "title": "Ошибка разбора исходного кода",
+   "enabled": true,
+   "importance": "Критичный",
+   "kind": "Ошибка"
+  },
+  "PrivilegedModuleMethodCall": {
+   "title": "Обращение к методам привилегированных модулей",
+   "enabled": true,
+   "importance": "Важный",
+   "kind": "Потенциальная уязвимость"
+  },
+  "ProcedureReturnsValue": {
+   "title": "Процедура не должна возвращать значение",
+   "enabled": true,
+   "importance": "Блокирующий",
+   "kind": "Ошибка"
+  },
+  "ProtectedModule": {
+   "title": "Защищенные модули",
+   "enabled": true,
+   "importance": "Важный",
+   "kind": "Дефект кода"
+  },
+  "PublicMethodsDescription": {
+   "title": "Все методы программного интерфейса должны иметь описание",
+   "enabled": true,
+   "importance": "Информационный",
+   "kind": "Дефект кода"
+  },
+  "QueryNestedFieldsByDot": {
+   "title": "Разыменование ссылочных полей запроса через точку",
+   "enabled": true,
+   "importance": "Важный",
+   "kind": "Дефект кода"
+  },
+  "QueryParseError": {
+   "title": "Ошибка разбора текста запроса",
+   "enabled": true,
+   "importance": "Важный",
+   "kind": "Дефект кода"
+  },
+  "QueryToMissingMetadata": {
+   "title": "Обращение к несуществующим метаданным в запросе",
+   "enabled": true,
+   "importance": "Блокирующий",
+   "kind": "Ошибка"
+  },
+  "RedundantAccessToObject": {
+   "title": "Избыточное обращение к объекту",
+   "enabled": true,
+   "importance": "Информационный",
+   "kind": "Дефект кода"
+  },
+  "RefOveruse": {
+   "title": "Избыточное использование \"Ссылка\" в запросе",
+   "enabled": true,
+   "importance": "Важный",
+   "kind": "Дефект кода"
+  },
+  "ReservedParameterNames": {
+   "title": "Зарезервированные имена параметров",
+   "enabled": true,
+   "importance": "Важный",
+   "kind": "Дефект кода"
+  },
+  "RewriteMethodParameter": {
+   "title": "Перезапись параметров метода",
+   "enabled": true,
+   "importance": "Важный",
+   "kind": "Дефект кода"
+  },
+  "SameMetadataObjectAndChildNames": {
+   "title": "Совпадает имя объекта метаданного и его дочернего",
+   "enabled": true,
+   "importance": "Критичный",
+   "kind": "Ошибка"
+  },
+  "ScheduledJobHandler": {
+   "title": "Обработчик регламентного задания",
+   "enabled": true,
+   "importance": "Критичный",
+   "kind": "Ошибка"
+  },
+  "SelectTopWithoutOrderBy": {
+   "title": "Использование 'ВЫБРАТЬ ПЕРВЫЕ' без 'УПОРЯДОЧИТЬ ПО'",
+   "enabled": true,
+   "importance": "Важный",
+   "kind": "Дефект кода"
+  },
+  "SelfAssign": {
+   "title": "Присвоение переменной самой себе",
+   "enabled": true,
+   "importance": "Важный",
+   "kind": "Ошибка"
+  },
+  "SelfInsertion": {
+   "title": "Вставка коллекции в саму себя",
+   "enabled": true,
+   "importance": "Важный",
+   "kind": "Ошибка"
+  },
+  "SemicolonPresence": {
+   "title": "Выражение должно заканчиваться символом \";\"",
+   "enabled": true,
+   "importance": "Незначительный",
+   "kind": "Дефект кода"
+  },
+  "ServerCallsInFormEvents": {
+   "title": "Серверные вызовы в событиях форм",
+   "enabled": true,
+   "importance": "Критичный",
+   "kind": "Ошибка"
+  },
+  "ServerSideExportFormMethod": {
+   "title": "Серверный экспортный метод формы",
+   "enabled": true,
+   "importance": "Блокирующий",
+   "kind": "Ошибка"
+  },
+  "SetPermissionsForNewObjects": {
+   "title": "Флажок «Устанавливать права для новых объектов» должен быть установлен только у роли ПолныеПрава",
+   "enabled": true,
+   "importance": "Критичный",
+   "kind": "Уязвимость"
+  },
+  "SetPrivilegedMode": {
+   "title": "Использование привилегированного режима",
+   "enabled": true,
+   "importance": "Важный",
+   "kind": "Потенциальная уязвимость"
+  },
+  "SeveralCompilerDirectives": {
+   "title": "Ошибочное указание нескольких директив компиляции",
+   "enabled": true,
+   "importance": "Критичный",
+   "kind": "Ошибка"
+  },
+  "SpaceAtStartComment": {
+   "title": "Пробел в начале комментария",
+   "enabled": true,
+   "importance": "Информационный",
+   "kind": "Дефект кода"
+  },
+  "StyleElementConstructors": {
+   "title": "Конструктор элемента стиля",
+   "enabled": true,
+   "importance": "Незначительный",
+   "kind": "Ошибка"
+  },
+  "TempFilesDir": {
+   "title": "Вызов функции КаталогВременныхФайлов()",
+   "enabled": true,
+   "importance": "Важный",
+   "kind": "Дефект кода"
+  },
+  "TernaryOperatorUsage": {
+   "title": "Использование тернарного оператора",
+   "enabled": false,
+   "importance": "Незначительный",
+   "kind": "Дефект кода"
+  },
+  "ThisObjectAssign": {
+   "title": "Присвоение значения свойству ЭтотОбъект",
+   "enabled": true,
+   "importance": "Блокирующий",
+   "kind": "Ошибка"
+  },
+  "TimeoutsInExternalResources": {
+   "title": "Таймауты при работе с внешними ресурсами",
+   "enabled": true,
+   "importance": "Критичный",
+   "kind": "Ошибка"
+  },
+  "TooManyReturns": {
+   "title": "Метод не должен содержать много возвратов",
+   "enabled": false,
+   "importance": "Незначительный",
+   "kind": "Дефект кода"
+  },
+  "TransferringParametersBetweenClientAndServer": {
+   "title": "Передача параметров между клиентом и сервером",
+   "enabled": true,
+   "importance": "Важный",
+   "kind": "Дефект кода"
+  },
+  "TryNumber": {
+   "title": "Приведение к числу в попытке",
+   "enabled": true,
+   "importance": "Важный",
+   "kind": "Дефект кода"
+  },
+  "Typo": {
+   "title": "Опечатка",
+   "enabled": true,
+   "importance": "Информационный",
+   "kind": "Дефект кода"
+  },
+  "UnaryPlusInConcatenation": {
+   "title": "Унарный плюс в конкатенации строк",
+   "enabled": true,
+   "importance": "Блокирующий",
+   "kind": "Ошибка"
+  },
+  "UnavailableMemberCall": {
+   "title": "Использование метода/свойства, недоступного в целевой версии платформы",
+   "enabled": true,
+   "importance": "Важный",
+   "kind": "Ошибка"
+  },
+  "UnionAll": {
+   "title": "Использование ключевого слова \"ОБЪЕДИНИТЬ\" в запросах",
+   "enabled": true,
+   "importance": "Незначительный",
+   "kind": "Дефект кода"
+  },
+  "UnknownMember": {
+   "title": "Обращение к неизвестному методу или свойству",
+   "enabled": false,
+   "importance": "Важный",
+   "kind": "Ошибка"
+  },
+  "UnknownPreprocessorSymbol": {
+   "title": "Неизвестный символ препроцессора",
+   "enabled": true,
+   "importance": "Критичный",
+   "kind": "Ошибка"
+  },
+  "UnreachableCode": {
+   "title": "Недостижимый код",
+   "enabled": true,
+   "importance": "Незначительный",
+   "kind": "Ошибка"
+  },
+  "UnsafeFindByCode": {
+   "title": "Небезопасное использование метода НайтиПоКоду()",
+   "enabled": true,
+   "importance": "Важный",
+   "kind": "Дефект кода"
+  },
+  "UnsafeSafeModeMethodCall": {
+   "title": "Небезопасное использование функции БезопасныйРежим()",
+   "enabled": true,
+   "importance": "Блокирующий",
+   "kind": "Ошибка"
+  },
+  "UnusedLocalMethod": {
+   "title": "Неиспользуемый локальный метод",
+   "enabled": true,
+   "importance": "Важный",
+   "kind": "Дефект кода"
+  },
+  "UnusedLocalVariable": {
+   "title": "Неиспользуемая локальная переменная",
+   "enabled": true,
+   "importance": "Важный",
+   "kind": "Дефект кода"
+  },
+  "UnusedParameters": {
+   "title": "Неиспользуемый параметр",
+   "enabled": true,
+   "importance": "Важный",
+   "kind": "Дефект кода"
+  },
+  "UsageWriteLogEvent": {
+   "title": "Неверное использование метода \"ЗаписьЖурналаРегистрации\"",
+   "enabled": true,
+   "importance": "Информационный",
+   "kind": "Дефект кода"
+  },
+  "UseLessForEach": {
+   "title": "Бесполезный перебор коллекции",
+   "enabled": true,
+   "importance": "Критичный",
+   "kind": "Ошибка"
+  },
+  "UseSystemInformation": {
+   "title": "Использование системной информации",
+   "enabled": false,
+   "importance": "Критичный",
+   "kind": "Потенциальная уязвимость"
+  },
+  "UselessTernaryOperator": {
+   "title": "Бесполезный тернарный оператор",
+   "enabled": true,
+   "importance": "Информационный",
+   "kind": "Дефект кода"
+  },
+  "UsingCancelParameter": {
+   "title": "Работа с параметром \"Отказ\"",
+   "enabled": true,
+   "importance": "Важный",
+   "kind": "Дефект кода"
+  },
+  "UsingExternalCodeTools": {
+   "title": "Использование возможностей выполнения внешнего кода",
+   "enabled": true,
+   "importance": "Критичный",
+   "kind": "Потенциальная уязвимость"
+  },
+  "UsingFindElementByString": {
+   "title": "Использование методов \"НайтиПоНаименованию\", \"НайтиПоКоду\" и \"НайтиПоНомеру\"",
+   "enabled": true,
+   "importance": "Важный",
+   "kind": "Дефект кода"
+  },
+  "UsingGoto": {
+   "title": "Оператор \"Перейти\" не должен использоваться",
+   "enabled": true,
+   "importance": "Критичный",
+   "kind": "Дефект кода"
+  },
+  "UsingHardcodeNetworkAddress": {
+   "title": "Хранение ip-адресов в коде",
+   "enabled": true,
+   "importance": "Критичный",
+   "kind": "Уязвимость"
+  },
+  "UsingHardcodePath": {
+   "title": "Хранение путей к файлам в коде",
+   "enabled": true,
+   "importance": "Критичный",
+   "kind": "Ошибка"
+  },
+  "UsingHardcodeSecretInformation": {
+   "title": "Хранение конфиденциальной информации в коде",
+   "enabled": true,
+   "importance": "Критичный",
+   "kind": "Уязвимость"
+  },
+  "UsingLikeInQuery": {
+   "title": "Использование 'ПОДОБНО' в запросе",
+   "enabled": false,
+   "importance": "Важный",
+   "kind": "Ошибка"
+  },
+  "UsingModalWindows": {
+   "title": "Использование модальных окон",
+   "enabled": true,
+   "importance": "Важный",
+   "kind": "Дефект кода"
+  },
+  "UsingObjectNotAvailableUnix": {
+   "title": "Использование объектов недоступных в Unix системах",
+   "enabled": true,
+   "importance": "Критичный",
+   "kind": "Ошибка"
+  },
+  "UsingServiceTag": {
+   "title": "Использование служебных тегов",
+   "enabled": true,
+   "importance": "Информационный",
+   "kind": "Дефект кода"
+  },
+  "UsingSynchronousCalls": {
+   "title": "Использование синхронных вызовов",
+   "enabled": true,
+   "importance": "Важный",
+   "kind": "Дефект кода"
+  },
+  "UsingThisForm": {
+   "title": "Использование устаревшего свойства \"ЭтаФорма\"",
+   "enabled": true,
+   "importance": "Незначительный",
+   "kind": "Дефект кода"
+  },
+  "VirtualTableCallWithoutParameters": {
+   "title": "Обращение к виртуальной таблице без параметров",
+   "enabled": true,
+   "importance": "Важный",
+   "kind": "Ошибка"
+  },
+  "WrongDataPathForFormElements": {
+   "title": "У полей формы не указан путь к данным",
+   "enabled": true,
+   "importance": "Критичный",
+   "kind": "Ошибка"
+  },
+  "WrongHttpServiceHandler": {
+   "title": "Неверно задан обработчик метода http-сервиса",
+   "enabled": true,
+   "importance": "Критичный",
+   "kind": "Ошибка"
+  },
+  "WrongUseFunctionProceedWithCall": {
+   "title": "Некорректное использование функции ПродолжитьВызов()",
+   "enabled": true,
+   "importance": "Блокирующий",
+   "kind": "Ошибка"
+  },
+  "WrongUseOfRollbackTransactionMethod": {
+   "title": "Некорректное использование метода ОтменитьТранзакцию()",
+   "enabled": true,
+   "importance": "Критичный",
+   "kind": "Ошибка"
+  },
+  "WrongWebServiceHandler": {
+   "title": "Неверно задан обработчик операции web-сервиса",
+   "enabled": true,
+   "importance": "Критичный",
+   "kind": "Ошибка"
+  },
+  "YoLetterUsage": {
+   "title": "Использование буквы \"ё\" в текстах модулей",
+   "enabled": true,
+   "importance": "Информационный",
+   "kind": "Дефект кода"
+  }
+ }
+}
