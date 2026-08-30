@@ -125,7 +125,7 @@ ZCode показывает модели в system-reminder только `name` +
 
 - `Nikolay-Shirokov/cc-1c-skills` — спецификации (ParentConfigurations.bin, форматы `.mdo`/`.dcs`). Используем как есть, со ссылкой.
 
-Рекомендуемая периодичность — раз в квартал сверять `std/index.md` с актуальным оглавлением v8std.
+Рекомендуемая периодичность — раз в квартал сверять `std/index.md` с актуальным оглавлением v8std. **Автоматизировано:** workflow `.github/workflows/upstream-sync.yml` (cron: 3-го числа янв/апр/июл/окт, 10:23 UTC + ручной запуск) гоняет `scripts/check_upstream_std.py` — скрипт сравнивает множества номеров стандартов (наши ссылки ↔ `docs/std/*.md` upstream через GitHub API) и при расхождении открывает/обновляет Issue со списком №. Локальная проверка: `python3 scripts/check_upstream_std.py`.
 
 ## Этапы развития набора
 

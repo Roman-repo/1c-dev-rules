@@ -1,0 +1,69 @@
+# Квартальная сверка оглавления std/ с upstream zeegin/v8std.
+# Раньше — ручная процедура «раз в квартал» (docs/ARCHITECTURE.md), теперь —
+# автомат: расхождение множеств номеров стандартов открывает/обновляет Issue.
+# Запуск: 3-го числа января/апреля/июля/октября, 10:23 UTC + вручную.
+name: upstream-sync
+
+on:
+  schedule:
+    - cron: "23 10 3 1,4,7,10 *"
+  workflow_dispatch:
+
+permissions:
+  issues: write
+
+jobs:
+  check-std-upstream:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      # Сверка: exit 0 — синхронно (шаги ниже пропускаются), 1 — расхождение,
+      # 2 — ошибка загрузки upstream (падаем красным, Issue не открываем).
+      - name: Diff std/ vs upstream v8std
+        id: diff
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set +e
+          python3 scripts/check_upstream_std.py --markdown > upstream-diff.md
+          code=$?
+          set -e
+          echo "exit_code=$code" >> "$GITHUB_OUTPUT"
+          if [ "$code" -eq 2 ]; then
+            cat upstream-diff.md
+            exit 2
+          fi
+
+      - name: Open or refresh tracking Issue
+        if: steps.diff.outputs.exit_code == '1'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TITLE="Upstream v8std: оглавление std/ расходится с zeegin/v8std"
+          EXISTING=$(gh issue list --state open --search "in:title \"$TITLE\"" \
+                     --json number --jq '.[0].number' || true)
+          {
+            echo "Автоматическая квартальная сверка (\`scripts/check_upstream_std.py\`,"
+            echo "workflow upstream-sync, запуск ${GITHUB_RUN_ID:-local})."
+            echo
+            cat upstream-diff.md
+          } > issue-body.md
+          if [ -n "$EXISTING" ]; then
+            gh issue comment "$EXISTING" --body-file issue-body.md
+            echo "Обновлён существующий Issue #$EXISTING"
+          else
+            gh issue create --title "$TITLE" --body-file issue-body.md \
+              --label "upstream" 2>/dev/null || \
+            gh issue create --title "$TITLE" --body-file issue-body.md
+            echo "Создан новый Issue"
+          fi
+
+      - name: In sync
+        if: steps.diff.outputs.exit_code == '0'
+        run: cat upstream-diff.md

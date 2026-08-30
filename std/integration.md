@@ -10,3 +10,4 @@
 | 771 | Интеграция прикладных решений через формат EnterpriseData | [ссылка](https://github.com/zeegin/v8std/blob/main/docs/std/771.md) |
 | 794 | Ограничения на использование внешних ресурсов | [ссылка](https://github.com/zeegin/v8std/blob/main/docs/std/794.md) |
 | 798 | Использование ботов системы взаимодействия | [ссылка](https://github.com/zeegin/v8std/blob/main/docs/std/798.md) |
+| 799 | Разработка правил регистраций | [ссылка](https://github.com/zeegin/v8std/blob/main/docs/std/799.md) |
