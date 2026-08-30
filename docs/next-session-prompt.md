@@ -43,7 +43,8 @@ TASK-001 (сессия 9), TASK-002 (сессия 11, из трекера) — �
 [--diff REF] [--format md|json]>` — regex-слой пакета checkbsl, ~22 ключа
 (0.24.0), exit 1 при 🔴; `python3 scripts/bsl_ls_analyze.py <файлы/каталог
 [--diff REF] [--src-root DIR] [--report FILE] [--slim-config] [--cache-dir]
-[--format md|json]>` — ядро полноты: bsl-language-server CLI, ~85–95% правил
+[--format md|json]>` — ядро полноты: bsl-language-server CLI, 129/322 правил
+каталога — 40% (слои 1+2 — 137, 42,5%; измерено на 0.29.0)
 (0.26.0: --slim-config — диагностики вне каталога∪ALIAS отключены, с 0.27.1
 кладутся в diagnostics.parameters — плоская карта игнорируется BSL LS
 1.0.7; --cache-dir
