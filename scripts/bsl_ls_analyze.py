@@ -325,9 +325,11 @@ def run_bsl_ls(java: Path, jar: Path, src_root: Path, config: Optional[Path],
         if not report.is_file():
             noise = [l for l in (proc.stderr or proc.stdout or "").splitlines()
                      if l.strip() and not l.startswith(("WARNING", "INFO"))]
-            tail = noise[-5:]
+            # первые строки — тип и класс ошибки (ClassNotFound/UnsupportedClassVersion),
+            # последние — контекст; голый хвост стектрейса бесполезен
+            keep = noise[:3] + (["…"] if len(noise) > 8 else []) + noise[-5:]
             raise RuntimeError("bsl-language-server не создал отчёт (exit "
-                               f"{proc.returncode}): " + " | ".join(tail))
+                               f"{proc.returncode}): " + " | ".join(keep))
         data = json.loads(report.read_text(encoding="utf-8"))
         # пути в отчёте: процентно-кодированы (кириллица) и бывают относительными —
         # якорь относительных: cwd java-процесса (= out); если там файла нет —

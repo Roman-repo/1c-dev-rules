@@ -34,11 +34,13 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Set up JDK 17
+      # JDK 21: exec.jar 1.0.7 (Spring Boot 3.5) на 17 падает в JarLauncher
+      # (Class.forName start-class) — проверено прогоном этой джобы
+      - name: Set up JDK 21
         uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: "17"
+          java-version: "21"
 
       # find_jar ищет в ~/.local/share/1c-dev-rules/ (тот же контракт, что локально).
       # Имя ассета версионировано (…-1.0.7-exec.jar), поэтому tag резолвим через API:
