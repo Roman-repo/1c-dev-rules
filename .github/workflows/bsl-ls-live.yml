@@ -1,0 +1,53 @@
+# CI: живой прогон слоя BSL LS (TestLiveAnalysis в tests/test_bsl_ls_analyze.py).
+# Локально и в validate.yml этот тест скипается без Java/jar — регрессии
+# run_bsl_ls/parse_report против реального выхода BSL LS ловились только
+# вручную. Здесь ubuntu-latest + Temurin JDK + свежий jar: тест включён.
+# Запуск: PR/push, трогающие слой BSL LS + еженедельно (дрейф формата отчёта
+# свежих релизов) + вручную.
+name: bsl-ls-live
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "scripts/bsl_ls_*"
+      - "tests/test_bsl_ls_analyze.py"
+      - ".github/workflows/bsl-ls-live.yml"
+  pull_request:
+    branches: [main]
+    paths:
+      - "scripts/bsl_ls_*"
+      - "tests/test_bsl_ls_analyze.py"
+      - ".github/workflows/bsl-ls-live.yml"
+  schedule:
+    - cron: "41 6 * * 1"  # понедельник, 06:41 UTC
+  workflow_dispatch:
+
+jobs:
+  live-analysis:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      # find_jar ищет в ~/.local/share/1c-dev-rules/ (тот же контракт, что локально)
+      - name: Download bsl-language-server.jar
+        run: |
+          mkdir -p "$HOME/.local/share/1c-dev-rules"
+          curl -sSfL -o "$HOME/.local/share/1c-dev-rules/bsl-language-server.jar" \
+            https://github.com/1c-syntax/bsl-language-server/releases/latest/download/bsl-language-server-exec.jar
+
+      # Прогон всего файла: юнит-тесты без Java идут как обычно, живой тест
+      # включается автоматически (java+jar найдены).
+      - name: Run analyzer tests incl. live analysis
+        run: python3 -m unittest tests.test_bsl_ls_analyze -v
