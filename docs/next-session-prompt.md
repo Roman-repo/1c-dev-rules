@@ -29,10 +29,14 @@ TASK-001 (сессия 9), TASK-002 (сессия 11, из трекера) — �
 КОД РЕВЬЮ, ДЕТЕРМИНИРОВАННЫЕ СЛОИ: `python3 scripts/checkbsl_scan.py <файлы/каталог
 [--diff REF] [--format md|json]>` — regex-слой пакета checkbsl, ~22 ключа
 (0.24.0), exit 1 при 🔴; `python3 scripts/bsl_ls_analyze.py <файлы/каталог
-[--diff REF] [--src-root DIR] [--format md|json]>` — ядро полноты:
-bsl-language-server CLI, ~85–95% правил (0.25.1; Java 11+ + jar — на этой
-машине установлены; exit 3 = слой недоступен). Срабатывания — кандидаты в
-findings 05a, решение всегда за Ревьюером.
+[--diff REF] [--src-root DIR] [--report FILE] [--format md|json]>` — ядро
+полноты: bsl-language-server CLI, ~85–95% правил (0.25.1; Java 11+ + jar —
+на этой машине установлены; exit 3 = слой недоступен). 🔴 ПОРЯДОК ПОВЕДЕНИЯ
+(петля самоочистки, 1c-code-review): прогон обоих слоёв на диффе задачи с
+`--report docs/delivery/<ЗАДАЧА>/code-review/bsl-ls-r<N>.md` (отчёт: код +
+что не так + как правильно) → есть 🔴 → возврат на этап «Разработка», правка
+по отчёту, повторный прогон (r<N+1>) — пока отчёт чист по 🔴; 🟡 правятся в
+петле или обосновываются в 05a; раунды хранятся в каталоге задачи.
 
 ТРЕКЕР: Project Control Tower на этой машине — http://localhost (SPA; данные
 через API `/api/v1/*`, Bearer-токен: POST /api/v1/auth/login c
