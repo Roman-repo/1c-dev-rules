@@ -40,12 +40,16 @@ jobs:
           distribution: temurin
           java-version: "17"
 
-      # find_jar ищет в ~/.local/share/1c-dev-rules/ (тот же контракт, что локально)
+      # find_jar ищет в ~/.local/share/1c-dev-rules/ (тот же контракт, что локально).
+      # Имя ассета версионировано (…-1.0.7-exec.jar), поэтому tag резолвим через API:
+      # releases/latest/download/bsl-language-server-exec.jar отвечает 404.
       - name: Download bsl-language-server.jar
         run: |
           mkdir -p "$HOME/.local/share/1c-dev-rules"
+          TAG=$(curl -sSf https://api.github.com/repos/1c-syntax/bsl-language-server/releases/latest \
+                | python3 -c "import json,sys; print(json.load(sys.stdin)['tag_name'])")
           curl -sSfL -o "$HOME/.local/share/1c-dev-rules/bsl-language-server.jar" \
-            https://github.com/1c-syntax/bsl-language-server/releases/latest/download/bsl-language-server-exec.jar
+            "https://github.com/1c-syntax/bsl-language-server/releases/download/${TAG}/bsl-language-server-${TAG#v}-exec.jar"
 
       # Прогон всего файла: юнит-тесты без Java идут как обычно, живой тест
       # включается автоматически (java+jar найдены).

@@ -18,8 +18,9 @@ regex-сканером checkbsl_scan.py и ручным проходом Рев�
 
 Установка (один раз):
     brew install openjdk                    # macOS; нужна Java 11+
-    curl -L -o ~/.local/share/1c-dev-rules/bsl-language-server.jar \
-      https://github.com/1c-syntax/bsl-language-server/releases/latest/download/bsl-language-server-exec.jar
+    # имя ассета версионировано (…-1.0.7-exec.jar): скачивайте exec.jar
+    # со страницы последнего релиза и положите в ~/.local/share/1c-dev-rules/:
+    # https://github.com/1c-syntax/bsl-language-server/releases/latest
 Поиск java: $BSL_LS_JAVA, PATH, /opt/homebrew/opt/openjdk (brew, keg-only);
 jar: $BSL_LS_JAR, .tools/ репо, ~/.local/share/1c-dev-rules/.
 
