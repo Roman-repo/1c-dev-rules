@@ -195,6 +195,77 @@ class TestParseReport(unittest.TestCase):
         findings, _, _ = wrapper.parse_report(rep, None)
         self.assertEqual(findings[0].key, "UseQueryInALoop")
 
+    def test_dedup_same_catalog_key_same_line(self):
+        """Два LS-кода на один ключ каталога (UnknownMember +
+        MissingCommonModuleMethod → NonExistentMethod) — одна находка."""
+        rep = report_for(self.dir, [diag("UnknownMember", 1),
+                                    diag("MissingCommonModuleMethod", 1)])
+        findings, _, _ = wrapper.parse_report(rep, None)
+        self.assertEqual(len(findings), 1)
+        self.assertEqual(findings[0].key, "NonExistentMethod")
+
+    def test_dedup_keeps_different_lines(self):
+        rep = report_for(self.dir, [diag("UnknownMember", 1),
+                                    diag("MissingCommonModuleMethod", 2)])
+        findings, _, _ = wrapper.parse_report(rep, None)
+        self.assertEqual(len(findings), 2)
+
+
+class TestMergeLayer1(unittest.TestCase):
+    """--merge-scan: слияние находок слоя 1 с дедупликацией (0.29.0)."""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.dir = Path(self._tmp.name)
+        self.module = self.dir / "Module.bsl"
+        self.module.write_text(
+            "Процедура П()\n"
+            "\tЗапрос.Выполнить();\n"
+            "КонецПроцедуры\n", encoding="utf-8")
+
+    def _scan_json(self, line: int, key: str = "UseQueryInALoop") -> Path:
+        p = self.dir / "scan.json"
+        p.write_text(json.dumps({"files": 1, "counts": {}, "findings": [{
+            "key": key, "severity": "red", "title": "t", "std": "436",
+            "file": str(self.module), "line": line, "fragment": "x",
+            "section": "overall",
+            "catalog": f"https://docs.checkbsl.org/checks/overall/{key}/"}]},
+            ensure_ascii=False), encoding="utf-8")
+        return p
+
+    def test_merge_dedup_same_key_file_line(self):
+        rep = report_for(self.dir, [diag("CreateQueryInCycle", 1)])  # строка 2
+        findings, _, extra = wrapper.parse_report(rep, None)
+        merged, mextra = wrapper.merge_layer1(findings, extra, self._scan_json(2))
+        self.assertEqual(len(merged), 1)
+        # побеждает слой 1: его метка в extra
+        self.assertEqual(mextra[0]["ls_code"], "слой 1 (checkbsl_scan)")
+
+    def test_merge_adds_non_overlapping(self):
+        rep = report_for(self.dir, [diag("DeprecatedMessage", 1)])
+        findings, _, extra = wrapper.parse_report(rep, None)
+        merged, _ = wrapper.merge_layer1(findings, extra, self._scan_json(2))
+        self.assertEqual(len(merged), 2)
+        self.assertEqual({f.key for f in merged},
+                         {"UseQueryInALoop", "DeprecatedMethodMessage"})
+
+    def test_report_header_coverage_and_merge_note(self):
+        rep = report_for(self.dir, [diag("DeprecatedMessage", 1)])
+        findings, nfiles, extra = wrapper.parse_report(rep, None)
+        md = wrapper.build_report(
+            findings, extra, nfiles,
+            {"inputs": "x", "coverage": "slim — отключено 53 диагностик",
+             "merged_scan": True})
+        self.assertIn("Покрытие: slim — отключено 53", md)
+        self.assertIn("слой 1 (`checkbsl_scan.py`, слито с дедупликацией)", md)
+
+    def test_report_header_without_coverage_unchanged(self):
+        rep = report_for(self.dir, [diag("DeprecatedMessage", 1)])
+        findings, nfiles, extra = wrapper.parse_report(rep, None)
+        md = wrapper.build_report(findings, extra, nfiles, {"inputs": "x"})
+        self.assertNotIn("Покрытие:", md)
+
 
 class TestFormats(unittest.TestCase):
     def test_md_table_and_exit_hint(self):

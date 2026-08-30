@@ -40,7 +40,7 @@
 ├── scripts/                     ← автопроверки плагина и проектов
 │   ├── delivery_tools.py        ← конвейер: status/check по артефактам 01–06 задачи, roadmap по каталогу доставки
 │   ├── checkbsl_scan.py         ← детерминированный regex-слой пакета checkbsl (~22 ключа, этап 6; файлы/каталог/--diff)
-│   ├── bsl_ls_analyze.py        ← средний слой этапа 6: bsl-language-server CLI, ~85–95% правил (AST); алиасы ключей на каталог, дифф по файлам/строкам; --report — md-отчёт ревью в каталог задачи
+│   ├── bsl_ls_analyze.py        ← средний слой этапа 6: bsl-language-server CLI, 129/322 правил каталога — 40% (AST); алиасы ключей на каталог, дифф по файлам/строкам; --report — md-отчёт ревью в каталог задачи
 │   ├── bsl_ls_diagnostics.json  ← таблица диагностик BSL LS (важность/тип; регенерация — harvest_bsl_ls.py)
 │   ├── bsl_ls_fixes.json        ← база знаний «что не так / как правильно» для отчёта ревью (32 ключа, пополняется)
 │   ├── harvest_checkbsl.py      ← регенерация каталога references/checkbsl/ из docs.checkbsl.org

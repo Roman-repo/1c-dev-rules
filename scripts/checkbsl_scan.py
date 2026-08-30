@@ -28,7 +28,8 @@ MagicNumber на осмысленном индексе) и переносит о
 
 Ограничения эвристик (сознательные): трекинг циклов считает заголовки
 «… Цикл» однострочными; строки внутри запросов ищутся как текст (включая
-строковые литералы); режим сервера определяется по «#Если Сервер» в файле.
+строковые литералы; многострочные литералы склеиваются для query-правил);
+режим сервера определяется по «#Если Сервер» в файле.
 """
 from __future__ import annotations
 
@@ -207,6 +208,61 @@ def mask_strings(code: str) -> str:
     return "".join(out)
 
 
+def str_part(code: str, in_str: bool) -> Tuple[str, bool]:
+    """Текст внутри строковых литералов строки и состояние «строка открыта»
+    на её конец. Для склейки многострочных литералов (тексты запросов).
+
+    На строке-продолжении (in_str на входе) срезается маркер продолжения:
+    ведущие пробелы и «|» — в BSL он не входит в значение литерала.
+    """
+    if in_str:  # продолжение литерала: отрезать «  | » в начале строки
+        code = re.sub(r"^\s*\|", "", code)
+    buf: List[str] = []
+    i, n = 0, len(code)
+    while i < n:
+        ch = code[i]
+        if in_str:
+            if ch == '"':
+                if i + 1 < n and code[i + 1] == '"':  # удвоенная кавычка
+                    buf.append('"')
+                    i += 2
+                    continue
+                in_str = False
+            else:
+                buf.append(ch)
+        elif ch == '"':
+            in_str = True
+        i += 1
+    return "".join(buf), in_str
+
+
+def string_blocks(lines: List[str]) -> List[Tuple[int, List[Tuple[int, str]]]]:
+    """Многострочные строковые литералы: (строка открытия, [(№ строки, текст)]).
+
+    В BSL текст запроса — литерал, открытый на одной строке и закрытый через
+    несколько (продолжения обычно с «|»). Однострочные литералы сюда не
+    попадают: их правила where=raw проверяют в основном цикле.
+    Комментарии срезаны до разбора, «//» внутри строк не трогаем.
+    """
+    blocks: List[Tuple[int, List[Tuple[int, str]]]] = []
+    in_str = False
+    start = 0
+    parts: List[Tuple[int, str]] = []
+    for lineno, raw in enumerate(lines, start=1):
+        code, _ = split_comment(raw)
+        part, in_str_after = str_part(code, in_str)
+        if in_str:  # строка открыта раньше — это продолжение литерала
+            parts.append((lineno, part))
+        elif '"' in code:  # литерал открывается на этой строке
+            start, parts = lineno, [(lineno, part)]
+        if in_str and not in_str_after and parts:  # литерал закрылся
+            if parts[-1][0] > start:  # только многострочные
+                blocks.append((start, parts))
+            parts = []
+        in_str = in_str_after
+    return blocks
+
+
 def read_text(path: Path) -> str:
     """UTF-8 (с BOM), падение на cp1251 (выгрузки конфигуратора), затем замена."""
     raw = path.read_bytes()
@@ -255,7 +311,8 @@ def scan_text(text: str, file: str, allow_numbers: Iterable[str] = ()) -> List[F
 
     findings: List[Finding] = []
     loop_depth = 0
-    for lineno, line in enumerate(text.splitlines(), start=1):
+    src_lines = text.splitlines()
+    for lineno, line in enumerate(src_lines, start=1):
         code, comment = split_comment(line)
         code_masked = mask_strings(code)
 
@@ -292,6 +349,35 @@ def scan_text(text: str, file: str, allow_numbers: Iterable[str] = ()) -> List[F
 
         if re.search(r"\bЦикл\s*$", code_masked):
             loop_depth += 1
+
+    # многострочные литералы (тексты запросов): паттерн может начаться на одной
+    # строке и закончиться на следующей («СрезПоследних(\n, Отбор)») — построчный
+    # проход такое не видит. Проверяем query-правила where=raw на склеенном
+    # тексте литерала; строка находки — строка начала совпадения
+    found = {(f.key, f.line) for f in findings}
+    for rule in RULES:
+        if rule.where != "raw" or rule.section != "query":
+            continue
+        rx = _compiled(rule)
+        for _, parts in string_blocks(src_lines):
+            joined = ""
+            offsets: List[Tuple[int, int]] = []  # (№ строки, сдвиг начала в joined)
+            for pline, ptext in parts:
+                offsets.append((pline, len(joined)))
+                joined += ptext + " "
+            for m in rx.finditer(joined):
+                line_no = offsets[0][0]
+                for pline, off in offsets:
+                    if off <= m.start():
+                        line_no = pline
+                    else:
+                        break
+                if (rule.key, line_no) in found:
+                    continue
+                found.add((rule.key, line_no))
+                frag = src_lines[line_no - 1].strip()[:80]
+                findings.append(Finding(rule.key, rule.sev, rule.title, rule.std,
+                                        file, line_no, frag, rule.section))
 
     return findings
 

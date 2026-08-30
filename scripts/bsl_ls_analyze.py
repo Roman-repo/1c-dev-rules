@@ -5,10 +5,12 @@ bsl_ls_analyze.py — ядро полноты пакета checkbsl: bsl-languag
 в режиме analyze, средний слой этапа «Код ревью» (1c-code-review) между
 regex-сканером checkbsl_scan.py и ручным проходом Ревьюера по каталогу.
 
-Зачем: сканер (слой 1) детерминированно закрывает ~22 текстовых ключа каталога,
-ИИ-проход по каталогу вероятностен (~60–70% номинально). BSL LS даёт ~85–95%
-детерминированно (AST: запросы, транзакции, устаревшие методы, сложность,
-области, метаданные). Слои: сканер → BSL LS (этот скрипт) → чек-лист/каталог.
+Зачем: сканер (слой 1) детерминированно закрывает 22 текстовых ключа каталога,
+ИИ-проход по каталогу вероятностен (~60–70% номинально). Слой 2 (BSL LS)
+детерминированно закрывает 129 ключей каталога из 322 (40%) через прямые
+совпадения и таблицу ALIAS; слой 1 ∪ слой 2 — 137 ключей (42,5%, измерено
+на 0.29.0). Остальные ~185 ключей каталога — за чек-листом и ручным проходом.
+Слои: сканер → BSL LS (этот скрипт) → чек-лист/каталог.
 На машинах без Java остаётся слой 1.
 
 Ключи BSL LS и каталога checkbsl — разные системы имён (совпадают напрямую
@@ -164,6 +166,35 @@ ALIAS: Dict[str, str] = {
     "TimeoutsInExternalResources": "ExternalResourceTimeout",
     "UsageWriteLogEvent": "WriteLogEventWrongUsage",
     "SeveralCompilerDirectives": "SeveralCompilationDirectives",
+    # расширение 0.29.0: сверено по текстам карточек docs.checkbsl.org ↔
+    # 1c-syntax.github.io/bsl-language-server (формулировки совпадают по смыслу;
+    # сомнительные пары по-прежнему не включаем)
+    "CodeBlockBeforeSub": "StatementBeforeMethodDef",
+    "CompilationDirectiveLost": "MethodsInCompilationDirective",
+    "DuplicateRegion": "RepeatingStandardRegions",
+    "ExtraCommas": "TrailingComma",
+    "FieldsFromJoinsWithoutIsNull": "UsingLeftOuterJoin",
+    "IfElseDuplicatedCodeBlock": "EqualBlock",
+    "IncorrectUseLikeInQuery": "ExpressionInLikeOperator",
+    "IncorrectUseOfStrTemplate": "StrTemplate",
+    "MetadataObjectNameLength": "MetadataNameLongerThan",
+    "MissingCommonModuleMethod": "NonExistentMethod",
+    "ProtectedModule": "NoPasswordProtectedModules",
+    "QueryNestedFieldsByDot": "ExcessiveDereferenceFields",
+    "SameMetadataObjectAndChildNames": "SameMetadataNames",
+    "SelfInsertion": "CyclicReferencesCollections",
+    "ServerSideExportFormMethod": "ExportMethodInFormModule",
+    "TernaryOperatorUsage": "UnwantedTernary",
+    "Typo": "Spelling",
+    "UnknownMember": "NonExistentMethod",
+    "UnknownPreprocessorSymbol": "UnknownPreprocessorCommand",
+    "UnsafeSafeModeMethodCall": "SafeModeInBooleanComparison",
+    "UsingHardcodeSecretInformation": "HardcodedPasswordAssignment",
+    "YoLetterUsage": "UsingUOInComment",
+    # Выполнить()/Вычислить() на сервере — тот же запрет, что ловит слой 1;
+    # алиас нужен, чтобы находки BSL LS получали № стандарта и fixes каталога
+    "ExecuteExternalCode": "ExecuteExport",
+    "ExecuteExternalCodeInCommonModule": "ExecuteExport",
 }
 
 # Важность BSL LS (индекс диагностик) → серьёзность findings, когда ключ не
@@ -433,12 +464,67 @@ def parse_report(report: dict, targets: Optional[Set[Path]],
                                          line, fragment, section))
             extra.append({"docs": docs, "message": d.get("message", ""),
                           "ls_code": code, "ls_severity": d.get("severity", "")})
+    # дедуп: несколько диагностик BSL LS могут маппиться на один ключ каталога
+    # (FunctionShouldHaveReturn/AllFunctionPathMustHaveReturn → FunctionReturn,
+    # MissingCommonModuleMethod/UnknownMember → NonExistentMethod) — одна
+    # находка на (ключ, файл, строка)
+    seen: Set[Tuple[str, str, int]] = set()
+    uniq: List[Tuple[scan.Finding, dict]] = []
+    for f, e in zip(findings, extra):
+        k = (f.key, f.file, f.line)
+        if k not in seen:
+            seen.add(k)
+            uniq.append((f, e))
     # сортируем пары, а не findings отдельно: extra (ls_code/message) должен
     # оставаться выровнен по индексам
-    pairs = sorted(zip(findings, extra),
+    pairs = sorted(uniq,
                    key=lambda p: (scan.SEV_RANK[p[0].sev], p[0].file, p[0].line))
     return ([p[0] for p in pairs], len(report.get("fileinfos", [])),
             [p[1] for p in pairs])
+
+
+def load_scan_findings(path: Path) -> Tuple[List[scan.Finding], List[dict]]:
+    """Findings слоя 1 из json-вывода checkbsl_scan.py (--format json)."""
+    data = json.loads(path.read_text(encoding="utf-8"))
+    findings: List[scan.Finding] = []
+    extra: List[dict] = []
+    for d in data.get("findings", []):
+        findings.append(scan.Finding(d["key"], d["severity"], d["title"],
+                                     d.get("std", ""), d["file"], d["line"],
+                                     d.get("fragment", ""),
+                                     d.get("section", "overall")))
+        extra.append({"docs": d.get("catalog", ""), "message": d["title"],
+                      "ls_code": "слой 1 (checkbsl_scan)", "ls_severity": ""})
+    return findings, extra
+
+
+def merge_layer1(findings: List[scan.Finding], extra: List[dict],
+                 scan_json: Path) -> Tuple[List[scan.Finding], List[dict]]:
+    """Слить находки слоя 1 с находками BSL LS, дедуп по (ключ, файл, строка).
+
+    Слой 1 идёт первым и побеждает при совпадении: его серьёзность — напрямую
+    из чек-листа, а формулировки совпадают с отчётом сканера. Пути для ключа
+    дедупа нормализуются до абсолютных (слой 1 и обёртка могут печатать
+    разные формы одного пути).
+    """
+    def dkey(f: scan.Finding) -> Tuple[str, str, int]:
+        p = Path(f.file)
+        if not p.is_absolute():
+            p = Path.cwd() / p
+        return (f.key, str(p.resolve()), f.line)
+
+    sf, se = load_scan_findings(scan_json)
+    seen = {dkey(f) for f in sf}
+    mf, me = list(sf), list(se)
+    for f, e in zip(findings, extra):
+        if dkey(f) in seen:
+            continue
+        seen.add(dkey(f))
+        mf.append(f)
+        me.append(e)
+    pairs = sorted(zip(mf, me),
+                   key=lambda p: (scan.SEV_RANK[p[0].sev], p[0].file, p[0].line))
+    return [p[0] for p in pairs], [p[1] for p in pairs]
 
 
 # --- дифф-фильтрация ----------------------------------------------------------------
@@ -510,7 +596,13 @@ def build_report(findings: List[scan.Finding], extra: List[dict], nfiles: int,
         "# Отчёт код-ревью — BSL LS (`bsl_ls_analyze.py`)",
         "",
         f"- Дата: {datetime.now().strftime('%Y-%m-%d %H:%M')}",
-        f"- Слой: bsl-language-server (AST), файлов разобрано: {nfiles}",
+        f"- Слой: bsl-language-server (AST), файлов разобрано: {nfiles}"
+        + (" + слой 1 (`checkbsl_scan.py`, слито с дедупликацией)"
+           if meta.get("merged_scan") else ""),
+    ]
+    if meta.get("coverage"):
+        lines.append(f"- Покрытие: {meta['coverage']}")
+    lines += [
         f"- Вход: {meta.get('inputs', '—')}"
         + (f"; дифф: `{meta.get('diff')}` (только изменённые строки)"
            if meta.get("diff") else ""),
@@ -631,6 +723,9 @@ def main(argv: Optional[List[str]] = None) -> int:
                          "jar, конфиг): повторный прогон петли без правок — мгновенно")
     ap.add_argument("--save-report", metavar="FILE",
                     help="сохранить сырой отчёт bsl-json.json в файл (отладка)")
+    ap.add_argument("--merge-scan", metavar="FILE",
+                    help="json-вывод checkbsl_scan.py (--format json): слить находки "
+                         "слоя 1 в общий отчёт с дедупликацией по (ключ, файл, строка)")
     ap.add_argument("--report", metavar="FILE",
                     help="md-отчёт ревью: код с замечаниями + что не так + как правильно "
                          "+ вердикт петли; каталог задачи создаётся (напр. "
@@ -679,9 +774,13 @@ def main(argv: Optional[List[str]] = None) -> int:
             ranges = None
 
         config = Path(args.config) if args.config else None
+        if args.config:
+            coverage = f"полный (явный конфиг: {config})"
         if not config:
             auto = src_root / ".bsl-language-server.json"
             config = auto if auto.is_file() else None
+            if config:
+                coverage = f"полный (конфиг проекта: {config})"
         if not config and args.slim_config:
             # свой конфиг не задан и не найден — генерируем узкий во временный файл
             tmp_cfg = tempfile.NamedTemporaryFile(
@@ -689,6 +788,12 @@ def main(argv: Optional[List[str]] = None) -> int:
                 delete=False, encoding="utf-8")
             config = slim_config(Path(tmp_cfg.name))
             tmp_cfg.close()
+            covered = set(load_catalog()) | set(ALIAS)
+            n_off = sum(1 for name in load_ls_table() if name not in covered)
+            coverage = (f"slim — отключено {n_off} диагностик вне "
+                        f"каталога∪ALIAS (--slim-config)")
+        if not config:
+            coverage = "полный (конфиг BSL LS по умолчанию)"
 
         cache_file = None
         if args.cache_dir:
@@ -709,6 +814,8 @@ def main(argv: Optional[List[str]] = None) -> int:
             Path(args.save_report).write_text(
                 json.dumps(report, ensure_ascii=False, indent=1), encoding="utf-8")
         findings, nfiles, extra = parse_report(report, targets, ranges)
+        if args.merge_scan:
+            findings, extra = merge_layer1(findings, extra, Path(args.merge_scan))
     except (FileNotFoundError, RuntimeError, json.JSONDecodeError) as e:
         print(f"❌ {e}", file=sys.stderr)
         return 2
@@ -719,7 +826,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     if args.report:
         inputs = (f"--diff {args.diff}" if args.diff
                   else ", ".join(str(p) for p in args.paths))
-        meta = {"inputs": inputs, "diff": args.diff, "round": 0}
+        meta = {"inputs": inputs, "diff": args.diff, "round": 0,
+                "coverage": coverage, "merged_scan": bool(args.merge_scan)}
         report_path = Path(args.report)
         # номер раунда петли: bsl-ls-rN.md в каталоге отчёта
         m = re.search(r"-r(\d+)\.md$", report_path.name)

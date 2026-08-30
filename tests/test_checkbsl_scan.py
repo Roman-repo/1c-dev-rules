@@ -131,6 +131,38 @@ class TestVirtualTableFilter(unittest.TestCase):
         code = "ВЫБРАТЬ РаботыСрезПоследних.Период ИЗ РаботыСрезПоследних"
         self.assertNotIn("VirtualTablesWithoutInnerFilter", keys(scan_code(code)))
 
+    def test_multiline_empty_period_fires(self):
+        # «СрезПоследних(» и «, Отбор)» на разных строках — построчный проход
+        # этого не видит, склейка литерала ловит (0.29.0)
+        code = ("Запрос.Текст = \"ВЫБРАТЬ *\n"
+                "| ИЗ РегистрСведений.Товары.СрезПоследних(\n"
+                "| , Номенклатура = &Н) КАК Срез\"")
+        found = [f for f in scan_code(code)
+                 if f.key == "VirtualTablesWithoutInnerFilter"]
+        self.assertEqual(len(found), 1)
+        self.assertEqual(found[0].line, 2)  # строка начала вызова ВТ
+
+    def test_multiline_with_period_ok(self):
+        code = ("Запрос.Текст = \"ВЫБРАТЬ *\n"
+                "| ИЗ РегистрСведений.Товары.СрезПоследних(\n"
+                "| &Дата, Номенклатура = &Н) КАК Срез\"")
+        self.assertNotIn("VirtualTablesWithoutInnerFilter", keys(scan_code(code)))
+
+    def test_multiline_single_line_not_duplicated(self):
+        # однострочный вызов ловится основным циклом — склейка не должна
+        # давать вторую находку на ту же строку
+        code = 'Запрос.Текст = "| ИЗ РегистрНакопления.Остатки(, Склад = &С)"'
+        found = [f for f in scan_code(code)
+                 if f.key == "VirtualTablesWithoutInnerFilter"]
+        self.assertEqual(len(found), 1)
+
+    def test_multiline_escaped_quotes(self):
+        # удвоенная кавычка внутри литерала не закрывает строку
+        code = ("Запрос.Текст = \"ВЫБРАТЬ \"\"поле\"\" *\n"
+                "| ИЗ РегистрНакопления.Остатки(\n"
+                "| , Склад = &С)\"")
+        self.assertIn("VirtualTablesWithoutInnerFilter", keys(scan_code(code)))
+
 
 class TestDeprecatedMethods(unittest.TestCase):
     def test_soobshit(self):
