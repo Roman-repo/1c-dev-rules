@@ -112,8 +112,20 @@ class TestVirtualTableFilter(unittest.TestCase):
         self.assertNotIn("VirtualTablesWithoutInnerFilter", keys(scan_code(code)))
 
     def test_alias_after_kak_ok(self):
-        code = 'Запрос.Текст = "| КАК Остатки ИЗ РегистрНакопления.Остатки(, Склад = &С)"'
+        # «КАК Остатки» — алиас, не вызов ВТ; вызов с периодом и отбором — чист
+        code = 'Запрос.Текст = "| КАК Остатки ИЗ РегистрНакопления.Остатки(&Период, Склад = &С)"'
         self.assertNotIn("VirtualTablesWithoutInnerFilter", keys(scan_code(code)))
+
+    def test_empty_period_param_fires(self):
+        # «СрезПоследних(, Отбор)» — отбор есть, периода нет: ВТ по всей истории
+        # (живой тест 0.27: ТОИР, торо_ВыбытиеОбъектаРемонта, строка 57)
+        code = ('Запрос.Текст = "| ЛЕВОЕ СОЕДИНЕНИЕ'
+                ' РегистрСведений.торо_Статусы.СрезПоследних(, Регистратор <> &Ссылка)"')
+        self.assertIn("VirtualTablesWithoutInnerFilter", keys(scan_code(code)))
+
+    def test_empty_period_param_ostatki_fires(self):
+        code = 'Запрос.Текст = "| ИЗ РегистрНакопления.Остатки(, Склад = &С)"'
+        self.assertIn("VirtualTablesWithoutInnerFilter", keys(scan_code(code)))
 
     def test_inside_identifier_ok(self):
         code = "ВЫБРАТЬ РаботыСрезПоследних.Период ИЗ РаботыСрезПоследних"
