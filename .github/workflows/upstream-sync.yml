@@ -67,3 +67,59 @@ jobs:
       - name: In sync
         if: steps.diff.outputs.exit_code == '0'
         run: cat upstream-diff.md
+
+  # Дрейф таблицы диагностик BSL LS: новый релиз добавляет/удаляет диагностики
+  # и меняет важность — таблица scripts/bsl_ls_diagnostics.json и мост ALIAS
+  # тихо устаревают. Расхождение открывает/обновляет Issue.
+  check-bsl-ls-drift:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      # Сверка: exit 0 — синхронно, 1 — дрейф, 2 — ошибка загрузки (красный
+      # прогон, Issue не открываем).
+      - name: Diff bsl_ls_diagnostics.json vs BSL LS index
+        id: drift
+        run: |
+          set +e
+          python3 scripts/check_bsl_ls_drift.py --markdown > bsl-ls-drift.md
+          code=$?
+          set -e
+          echo "exit_code=$code" >> "$GITHUB_OUTPUT"
+          if [ "$code" -eq 2 ]; then
+            cat bsl-ls-drift.md
+            exit 2
+          fi
+
+      - name: Open or refresh tracking Issue
+        if: steps.drift.outputs.exit_code == '1'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TITLE="BSL LS: таблица диагностик расходится с индексом 1c-syntax"
+          EXISTING=$(gh issue list --state open --search "in:title \"$TITLE\"" \
+                     --json number --jq '.[0].number' || true)
+          {
+            echo "Автоматическая квартальная сверка (\`scripts/check_bsl_ls_drift.py\`,"
+            echo "workflow upstream-sync, запуск ${GITHUB_RUN_ID:-local})."
+            echo
+            cat bsl-ls-drift.md
+          } > issue-body.md
+          if [ -n "$EXISTING" ]; then
+            gh issue comment "$EXISTING" --body-file issue-body.md
+            echo "Обновлён существующий Issue #$EXISTING"
+          else
+            gh issue create --title "$TITLE" --body-file issue-body.md \
+              --label "upstream" 2>/dev/null || \
+            gh issue create --title "$TITLE" --body-file issue-body.md
+            echo "Создан новый Issue"
+          fi
+
+      - name: In sync
+        if: steps.drift.outputs.exit_code == '0'
+        run: cat bsl-ls-drift.md

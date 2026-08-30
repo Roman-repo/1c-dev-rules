@@ -100,6 +100,16 @@ class TestAliasAndSeverity(unittest.TestCase):
         sev, std = wrapper.sev_std("SynchronousMethods", "UsingSynchronousCalls")
         self.assertEqual((sev, std), ("yellow", "703"))
 
+    def test_name_bridge_coverage_not_below_baseline(self):
+        """Замок от регресса моста имён: доля диагностик LS, покрытых каталогом
+        ∪ ALIAS, не падает ниже базовой (109/186 на 0.25.1). Рост таблицы
+        диагностик upstream ловит квартальная сверка check_bsl_ls_drift.py."""
+        table = wrapper.load_ls_table()
+        covered = set(wrapper.load_catalog()) | set(wrapper.ALIAS)
+        ratio = len(set(table) & covered) / len(table)
+        self.assertGreaterEqual(ratio, 0.58,
+                                f"покрытие моста имён упало: {ratio:.0%}")
+
 
 class TestParseReport(unittest.TestCase):
     def setUp(self):
@@ -334,6 +344,51 @@ class TestReviewReport(unittest.TestCase):
         # слой недоступен (exit 3) — отчёт по-прежнему не пишется: петля не начиналась
         self.assertEqual(rc, 3)
         self.assertFalse((self.dir / "t" / "code-review").exists())
+
+
+class TestSlimConfigAndCache(unittest.TestCase):
+    """--slim-config: узкий конфиг; cache_key: чувствительность к правкам входов."""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.dir = Path(self._tmp.name)
+
+    def test_slim_config_disables_only_uncovered(self):
+        cfg = wrapper.slim_config(self.dir / "slim.json")
+        off = json.loads(cfg.read_text(encoding="utf-8"))["diagnostics"]
+        # CreateQueryInCycle покрыт алиасом — остаётся включённой
+        self.assertNotIn("CreateQueryInCycle", off)
+        # UseQueryInALoop — прямой ключ каталога — тоже включён
+        self.assertNotIn("UseQueryInALoop", off)
+        # непокрытая диагностика — отключена
+        uncovered = next(k for k in wrapper.load_ls_table()
+                         if k not in wrapper.load_catalog()
+                         and k not in wrapper.ALIAS)
+        self.assertIs(off[uncovered], False)
+
+    def test_cache_key_changes_on_edit(self):
+        src = self.dir / "src"
+        src.mkdir()
+        module = src / "Module.bsl"
+        module.write_text("Процедура П()\nКонецПроцедуры\n", encoding="utf-8")
+        jar = self.dir / "bsl-language-server.jar"
+        jar.write_bytes(b"jar")
+        k1 = wrapper.cache_key(src, jar, None)
+        self.assertEqual(k1, wrapper.cache_key(src, jar, None))  # стабилен
+        module.write_text("Процедура П()\n\tСообщить(1);\nКонецПроцедуры\n",
+                          encoding="utf-8")  # правка: размер и mtime меняются
+        self.assertNotEqual(k1, wrapper.cache_key(src, jar, None))
+
+    def test_cache_key_changes_on_config(self):
+        src = self.dir / "src"
+        src.mkdir()
+        jar = self.dir / "bsl-language-server.jar"
+        jar.write_bytes(b"jar")
+        cfg = self.dir / ".bsl-language-server.json"
+        k1 = wrapper.cache_key(src, jar, None)
+        cfg.write_text("{}", encoding="utf-8")
+        self.assertNotEqual(k1, wrapper.cache_key(src, jar, cfg))
 
 
 class TestFindTools(unittest.TestCase):

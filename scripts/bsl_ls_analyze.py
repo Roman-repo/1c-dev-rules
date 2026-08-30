@@ -18,8 +18,9 @@ regex-сканером checkbsl_scan.py и ручным проходом Рев�
 
 Установка (один раз):
     brew install openjdk                    # macOS; нужна Java 11+
-    curl -L -o ~/.local/share/1c-dev-rules/bsl-language-server.jar \
-      https://github.com/1c-syntax/bsl-language-server/releases/latest/download/bsl-language-server-exec.jar
+    # имя ассета версионировано (…-1.0.7-exec.jar): скачивайте exec.jar
+    # со страницы последнего релиза и положите в ~/.local/share/1c-dev-rules/:
+    # https://github.com/1c-syntax/bsl-language-server/releases/latest
 Поиск java: $BSL_LS_JAVA, PATH, /opt/homebrew/opt/openjdk (brew, keg-only);
 jar: $BSL_LS_JAR, .tools/ репо, ~/.local/share/1c-dev-rules/.
 
@@ -33,6 +34,12 @@ srcDir для BSL LS по умолчанию — общий родитель в�
 корень исходников конфигурации (EDT src с Configuration.mdo) — анализ полнее,
 findings фильтруются по входным файлам.
 
+Стоимость петли на больших конфигурациях: BSL LS разбирает всё дерево srcDir
+на каждой итерации «правка → прогон» (это требование AST-анализа — контекст
+метаданных и межмодульных вызовов). Ускорение: --slim-config (анализ только
+диагностик каталога∪ALIAS), --cache-dir (повтор без правок — мгновенно),
+тюнинг --timeout / --no-line-filter (см. --help).
+
 Выход: 0 — 🔴 нет, 1 — есть 🔴, 2 — ошибка, 3 — слой недоступен (нет Java/jar —
 работайте слоем 1: scripts/checkbsl_scan.py). Срабатывание — кандидат в
 findings 05a: серьёзность — чек-лист сканера → важность BSL LS; решение за
@@ -41,6 +48,7 @@ findings 05a: серьёзность — чек-лист сканера → ва
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import re
@@ -246,6 +254,51 @@ def find_jar(explicit: Optional[str] = None) -> Optional[Path]:
     return None
 
 
+# --- ускорение петли: узкий конфиг и кэш отчёта -------------------------------------
+
+CACHE_VERSION = 1  # бамп при смене логики формирования/разбора отчёта
+
+
+def slim_config(path: Path) -> Path:
+    """Временный конфиг BSL LS: диагностики вне каталога ∪ ALIAS отключены.
+
+    Обёртка всё равно маппит на каталог checkbsl: диагностики без покрытия
+    получают дефолтную 🟡 и ссылку на доки BSL LS, но не № стандарта и не
+    запись в базе fixes. Отключение их на старте ускоряет анализ больших
+    конфигураций и убирает шум из отчёта петли (флаг --slim-config).
+    """
+    covered = set(load_catalog()) | set(ALIAS)
+    off = {name: False for name in load_ls_table() if name not in covered}
+    path.write_text(json.dumps({"diagnostics": off}, ensure_ascii=False),
+                    encoding="utf-8")
+    return path
+
+
+def cache_key(src_root: Path, jar: Path, config: Optional[Path]) -> str:
+    """Хэш входов анализа: дерево src_root (путь/размер/mtime), jar, конфиг.
+
+    mtime+size вместо содержимого: на 2–3 тыс. модулей хэширование файлов
+    занимало бы заметную долю выигрыша; коллизия mtime+size практически
+    невозможна в петле «правка → прогон» (правка меняет mtime).
+    """
+    h = hashlib.sha256()
+    h.update(f"v{CACHE_VERSION}".encode())
+    st = jar.stat()
+    h.update(f"{jar.name}:{st.st_size}:{st.st_mtime_ns}".encode())
+    h.update(config.read_bytes() if config else b"<no-config>")
+    for dirpath, dirnames, filenames in os.walk(src_root):
+        dirnames[:] = sorted(d for d in dirnames if d not in (".git", "node_modules"))
+        for fn in sorted(filenames):
+            p = Path(dirpath) / fn
+            try:
+                s = p.stat()
+            except OSError:
+                continue
+            h.update(f"{p.relative_to(src_root)}:{s.st_size}:{s.st_mtime_ns}\n"
+                     .encode())
+    return h.hexdigest()
+
+
 # --- запуск CLI и разбор отчёта ----------------------------------------------------
 
 
@@ -272,17 +325,26 @@ def run_bsl_ls(java: Path, jar: Path, src_root: Path, config: Optional[Path],
         if not report.is_file():
             noise = [l for l in (proc.stderr or proc.stdout or "").splitlines()
                      if l.strip() and not l.startswith(("WARNING", "INFO"))]
-            tail = noise[-5:]
+            # первые строки — тип и класс ошибки (ClassNotFound/UnsupportedClassVersion),
+            # последние — контекст; голый хвост стектрейса бесполезен
+            keep = noise[:3] + (["…"] if len(noise) > 8 else []) + noise[-5:]
             raise RuntimeError("bsl-language-server не создал отчёт (exit "
-                               f"{proc.returncode}): " + " | ".join(tail))
+                               f"{proc.returncode}): " + " | ".join(keep))
         data = json.loads(report.read_text(encoding="utf-8"))
         # пути в отчёте: процентно-кодированы (кириллица) и бывают относительными —
-        # якорь относительных: cwd java-процесса (= out)
+        # якорь относительных: cwd java-процесса (= out); если там файла нет —
+        # src_root (так пути ведут на реальные исходники, а не в удаляемый tmp —
+        # это же делает безопасным кэш отчёта --cache-dir между прогонами)
         for fi in data.get("fileinfos", []):
             p = unquote(fi.get("path", "")).removeprefix("file://")
             if not p:
                 continue
-            fi["path"] = str((out / p).resolve()) if not p.startswith("/") else p
+            if p.startswith("/"):
+                fi["path"] = p
+            else:
+                cand = (out / p).resolve()
+                fi["path"] = str(cand) if cand.exists() \
+                    else str((src_root / p).resolve())
         return data
 
 
@@ -550,9 +612,19 @@ def main(argv: Optional[List[str]] = None) -> int:
                     help="конфиг bsl-language-server.json (дефолт: <src-root>/.bsl-language-server.json)")
     ap.add_argument("--java", help="путь к java (дефолт: $BSL_LS_JAVA, PATH, brew)")
     ap.add_argument("--jar", help="путь к jar BSL LS (дефолт: $BSL_LS_JAR, .tools/, ~/.local/share)")
-    ap.add_argument("--timeout", type=int, default=900, help="таймаут анализа, сек (дефолт 900)")
+    ap.add_argument("--timeout", type=int, default=900, help="таймаут анализа, сек (дефолт 900; "
+                    "на больших конфигурациях при нехватке — увеличить или сузить srcDir)")
     ap.add_argument("--no-line-filter", action="store_true",
-                    help="в --diff фильтровать только по файлам, не по строкам")
+                    help="в --diff фильтровать только по файлам, не по строкам "
+                         "(шире: находки на соседних строках тоже попадут в отчёт)")
+    ap.add_argument("--slim-config", action="store_true",
+                    help="временный конфиг BSL LS: диагностики вне каталога∪ALIAS "
+                         "отключены — анализ быстрее, шум 🟡 без каталога уходит; "
+                         "игнорируется, если задан --config или есть "
+                         "<src-root>/.bsl-language-server.json")
+    ap.add_argument("--cache-dir", metavar="DIR",
+                    help="кэш отчёта bsl-json.json по хэшу входов (дерево src_root, "
+                         "jar, конфиг): повторный прогон петли без правок — мгновенно")
     ap.add_argument("--save-report", metavar="FILE",
                     help="сохранить сырой отчёт bsl-json.json в файл (отладка)")
     ap.add_argument("--report", metavar="FILE",
@@ -606,8 +678,29 @@ def main(argv: Optional[List[str]] = None) -> int:
         if not config:
             auto = src_root / ".bsl-language-server.json"
             config = auto if auto.is_file() else None
+        if not config and args.slim_config:
+            # свой конфиг не задан и не найден — генерируем узкий во временный файл
+            tmp_cfg = tempfile.NamedTemporaryFile(
+                mode="w", prefix="bsl_ls_slim_", suffix=".json",
+                delete=False, encoding="utf-8")
+            config = slim_config(Path(tmp_cfg.name))
+            tmp_cfg.close()
 
-        report = run_bsl_ls(java, jar, src_root.resolve(), config, args.timeout)
+        cache_file = None
+        if args.cache_dir:
+            cache_dir = Path(args.cache_dir)
+            cache_dir.mkdir(parents=True, exist_ok=True)
+            cache_file = cache_dir / f"{cache_key(src_root.resolve(), jar, config)}.json"
+
+        if cache_file and cache_file.is_file():
+            report = json.loads(cache_file.read_text(encoding="utf-8"))
+            print(f"⚡ кэш отчёта: {cache_file.name} (входы не менялись, "
+                  f"java-прогон пропущен)", file=sys.stderr)
+        else:
+            report = run_bsl_ls(java, jar, src_root.resolve(), config, args.timeout)
+            if cache_file:
+                cache_file.write_text(json.dumps(report, ensure_ascii=False),
+                                      encoding="utf-8")
         if args.save_report:
             Path(args.save_report).write_text(
                 json.dumps(report, ensure_ascii=False, indent=1), encoding="utf-8")
