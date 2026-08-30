@@ -64,6 +64,32 @@ python3 scripts/harvest_checkbsl.py   # нужна сеть
 смене структуры каталога. После перегенерации — прогон
 `python3 scripts/validate_skills.py`.
 
+## Слой BSL LS (работа над анализатором)
+
+Правки `scripts/bsl_ls_analyze.py`, таблицы алиасов, базы `bsl_ls_fixes.json`
+или `tests/test_bsl_ls_analyze.py` требуют живого окружения bsl-language-server:
+
+1. **Java 21+** — macOS: `brew install openjdk`; Windows/Linux: Temurin 21.
+   exec.jar 1.0.7 на JDK 17 падает при запуске (проверено в CI).
+2. **jar** — `bsl-language-server-<версия>-exec.jar` (~124 МБ) со
+   [страницы релизов](https://github.com/1c-syntax/bsl-language-server/releases/latest)
+   в `~/.local/share/1c-dev-rules/bsl-language-server.jar` (или `.tools/` репо,
+   или `$BSL_LS_JAR`; java в нестандартном месте — `$BSL_LS_JAVA`).
+3. **Проверка** — `python3 -m unittest tests.test_bsl_ls_analyze -v`: без
+   окружения живой тест (`TestLiveAnalysis`) скипается, с окружением — гоняет
+   реальный анализ. В CI живой прогон выполняет джоба `bsl-ls-live` (JDK 21 +
+   свежий jar) на PR по путям слоя и еженедельно.
+
+Сопутствующее:
+
+- `scripts/harvest_bsl_ls.py` — регенерация `bsl_ls_diagnostics.json` из
+  индекса диагностик (нужна сеть). Дрейф таблицы отслеживается автоматически:
+  джоба `check-bsl-ls-drift` в workflow `upstream-sync` раз в квартал открывает
+  Issue при расхождении (локально: `python3 scripts/check_bsl_ls_drift.py`).
+- Новая пара алиасов BSL LS ↔ каталог checkbsl — только после сверки
+  формулировок обеих документаций; сомнительные пары не добавляем.
+- Новый ключ в `bsl_ls_fixes.json` обязан существовать в каталоге (держит тест).
+
 ## Версионирование
 
 - `plugin.json` → `version` (SemVer).
