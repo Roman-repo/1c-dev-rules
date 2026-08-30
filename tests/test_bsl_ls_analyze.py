@@ -356,7 +356,9 @@ class TestSlimConfigAndCache(unittest.TestCase):
 
     def test_slim_config_disables_only_uncovered(self):
         cfg = wrapper.slim_config(self.dir / "slim.json")
-        off = json.loads(cfg.read_text(encoding="utf-8"))["diagnostics"]
+        # персональные настройки — в diagnostics.parameters; плоская карта
+        # прямо в diagnostics молча игнорируется BSL LS (эмпирика 1.0.7)
+        off = json.loads(cfg.read_text(encoding="utf-8"))["diagnostics"]["parameters"]
         # CreateQueryInCycle покрыт алиасом — остаётся включённой
         self.assertNotIn("CreateQueryInCycle", off)
         # UseQueryInALoop — прямой ключ каталога — тоже включён

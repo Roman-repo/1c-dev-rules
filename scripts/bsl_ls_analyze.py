@@ -266,11 +266,15 @@ def slim_config(path: Path) -> Path:
     получают дефолтную 🟡 и ссылку на доки BSL LS, но не № стандарта и не
     запись в базе fixes. Отключение их на старте ускоряет анализ больших
     конфигураций и убирает шум из отчёта петли (флаг --slim-config).
+
+    Формат: персональные настройки диагностик лежат в diagnostics.parameters
+    (значение false = отключена); плоская карта в diagnostics молча
+    игнорируется (эмпирика 1.0.7, живой прогон 0.27.1).
     """
     covered = set(load_catalog()) | set(ALIAS)
     off = {name: False for name in load_ls_table() if name not in covered}
-    path.write_text(json.dumps({"diagnostics": off}, ensure_ascii=False),
-                    encoding="utf-8")
+    path.write_text(json.dumps({"diagnostics": {"parameters": off}},
+                               ensure_ascii=False), encoding="utf-8")
     return path
 
 
