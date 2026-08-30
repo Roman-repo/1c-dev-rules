@@ -265,6 +265,77 @@ class TestGracefulDegradation(unittest.TestCase):
         self.assertIn("jar", err.getvalue())
 
 
+class TestReviewReport(unittest.TestCase):
+    """--report: md-отчёт с кодом, «что не так» и «как правильно»."""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.dir = Path(self._tmp.name)
+        self.module = self.dir / "Module.bsl"
+        self.module.write_text(
+            "Процедура П()\n"
+            "\tДля Каждого С Из М Цикл\n"
+            "\t\tЗапрос.Выполнить();\n"
+            "\tКонецЦикла;\n"
+            "\tСообщить(\"готово\");\n"
+            "КонецПроцедуры\n", encoding="utf-8")
+
+    def _findings(self):
+        rep = report_for(self.dir, [diag("CreateQueryInCycle", 2),
+                                    diag("DeprecatedMessage", 4)])
+        return wrapper.parse_report(rep, None)  # (findings, nfiles, extra)
+
+    def test_fixes_keys_exist_in_catalog(self):
+        """Каждый ключ базы знаний — реальный ключ каталога, сканера или BSL LS."""
+        valid = (set(wrapper.load_catalog())
+                 | {r.key for r in wrapper.scan.RULES}
+                 | set(wrapper.load_ls_table()))
+        for key in wrapper.load_fixes():
+            self.assertIn(key, valid, f"fix-ключ {key} не существует")
+
+    def test_report_contains_code_why_and_fix(self):
+        findings, nfiles, extra = self._findings()
+        md = wrapper.build_report(findings, extra, nfiles,
+                                  {"inputs": "Module.bsl", "round": 1})
+        self.assertIn("## 🔴 Блокирующие", md)
+        self.assertIn("← замечание", md)                       # код с маркером
+        self.assertIn("Что не так:", md)
+        self.assertIn("Как правильно:", md)
+        self.assertIn("МассивСсылок", md)                      # пример из базы знаний
+        self.assertIn("возврат на этап «Разработка»", md)      # вердикт петли
+        self.assertIn("r2", md)                                # следующий раунд
+
+    def test_verdict_clean_without_red(self):
+        rep = report_for(self.dir, [diag("DeprecatedMessage", 4)])
+        findings, nfiles, extra = wrapper.parse_report(rep, None)
+        md = wrapper.build_report(findings, extra, nfiles, {"inputs": "x"})
+        self.assertIn("🔴 нет", md)
+        self.assertNotIn("возврат на этап", md)
+
+    def test_verdict_fully_clean(self):
+        md = wrapper.build_report([], [], 0, {"inputs": "x"})
+        self.assertIn("чисто — петля закрыта", md)
+
+    def test_fallback_when_no_fix_entry(self):
+        rep = report_for(self.dir, [diag("BrandNewDiagnostic99", 1)])
+        findings, nfiles, extra = wrapper.parse_report(rep, None)
+        md = wrapper.build_report(findings, extra, nfiles, {"inputs": "x"})
+        self.assertIn("пример — по карточке", md)              # честный fallback
+        self.assertIn("текст", md)                             # сообщение LS как «что не так»
+
+    def test_report_written_via_cli_flag(self):
+        import contextlib
+        import io
+        out = io.StringIO()
+        rc = wrapper.main([str(self.module),
+                           "--java", "/nonexistent-java", "--jar", "/nonexistent.jar",
+                           "--report", str(self.dir / "t" / "code-review" / "bsl-ls-r1.md")])
+        # слой недоступен (exit 3) — отчёт по-прежнему не пишется: петля не начиналась
+        self.assertEqual(rc, 3)
+        self.assertFalse((self.dir / "t" / "code-review").exists())
+
+
 class TestFindTools(unittest.TestCase):
     def test_explicit_jar_authoritative(self):
         self.assertIsNone(wrapper.find_jar("/nonexistent.jar"))

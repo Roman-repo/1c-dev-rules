@@ -59,6 +59,7 @@ import checkbsl_scan as scan  # noqa: E402  (общий слой: Finding, RULES
 REPO_ROOT = Path(__file__).resolve().parent.parent
 CATALOG_DIR = REPO_ROOT / "skills" / "1c-code-review" / "references" / "checkbsl"
 LS_TABLE = Path(__file__).resolve().parent / "bsl_ls_diagnostics.json"
+FIXES = Path(__file__).resolve().parent / "bsl_ls_fixes.json"
 
 # Ключ BSL LS → ключ каталога checkbsl (разные системы имён). Сверено по
 # формулировкам docs.checkbsl.org ↔ 1c-syntax.github.io/bsl-language-server;
@@ -192,6 +193,14 @@ def load_ls_table() -> Dict[str, dict]:
     """Имя диагностики BSL LS → {title, importance, ...} из bsl_ls_diagnostics.json."""
     data = json.loads(LS_TABLE.read_text(encoding="utf-8"))
     return data.get("diagnostics", {})
+
+
+@lru_cache(maxsize=1)
+def load_fixes() -> Dict[str, dict]:
+    """Ключ каталога → {why, good}: «что не так» и пример «как правильно»
+    для отчёта ревью. Пополняется по находкам живых ревью."""
+    data = json.loads(FIXES.read_text(encoding="utf-8"))
+    return {k: v for k, v in data.items() if not k.startswith("_")}
 
 
 # --- поиск java и jar -------------------------------------------------------------
@@ -399,6 +408,95 @@ def added_line_ranges(ref: str, files: List[Path]) -> Dict[Path, List[Tuple[int,
     return out
 
 
+# --- отчёт ревью (--report) ----------------------------------------------------------
+
+
+def snippet(file: str, line: int, context: int = 2) -> str:
+    """Код с замечанием: строки вокруг (номера + маркер на строке замечания)."""
+    try:
+        path = Path(file)
+        if not path.is_absolute():
+            path = Path.cwd() / path
+        lines = scan.read_text(path).splitlines()
+    except OSError:
+        return "(источник недоступен)"
+    lo, hi = max(1, line - context), min(len(lines), line + context)
+    out = []
+    for n in range(lo, hi + 1):
+        mark = "  ← замечание" if n == line else ""
+        out.append(f"{n:4d} | {lines[n - 1].rstrip()[:110]}{mark}")
+    return "\n".join(out)
+
+
+def build_report(findings: List[scan.Finding], extra: List[dict], nfiles: int,
+                 meta: dict) -> str:
+    """Md-отчёт по замечаниям: код + что не так + как правильно + вердикт петли.
+
+    Хранится в каталоге задачи (docs/delivery/<TASK>/code-review/); следующая
+    итерация петли «правка → повторный прогон» пишет новый файл r<N+1>.
+    """
+    from datetime import datetime
+
+    fixes = load_fixes()
+    counts = {s: sum(1 for f in findings if f.sev == s)
+              for s in ("red", "yellow", "green")}
+    lines: List[str] = [
+        "# Отчёт код-ревью — BSL LS (`bsl_ls_analyze.py`)",
+        "",
+        f"- Дата: {datetime.now().strftime('%Y-%m-%d %H:%M')}",
+        f"- Слой: bsl-language-server (AST), файлов разобрано: {nfiles}",
+        f"- Вход: {meta.get('inputs', '—')}"
+        + (f"; дифф: `{meta.get('diff')}` (только изменённые строки)"
+           if meta.get("diff") else ""),
+        f"- Замечания: **{len(findings)}** — 🔴 {counts['red']},"
+        f" 🟡 {counts['yellow']}, 🟢 {counts['green']}",
+    ]
+    if counts["red"]:
+        lines.append(f"- **Вердикт: 🔴 есть — возврат на этап «Разработка»,"
+                     f" правка, повторный прогон (следующий отчёт r{int(meta.get('round', 0)) + 1}).**")
+    elif findings:
+        lines.append("- Вердикт: 🔴 нет — 🟡/🟢 на решение Ревьюера (05a).")
+    else:
+        lines.append("- Вердикт: чисто — петля закрыта, код на ревью Ревьюеру.")
+
+    section_titles = {"red": "🔴 Блокирующие (исправить до повторного прогона)",
+                      "yellow": "🟡 Важные (править или обосновать в 05a)",
+                      "green": "🟢 Рекомендации (на усмотрение автора)"}
+    n = 0
+    for sev in ("red", "yellow", "green"):
+        group = [(f, e) for f, e in zip(findings, extra) if f.sev == sev]
+        if not group:
+            continue
+        lines += ["", f"## {section_titles[sev]}", ""]
+        for f, e in group:
+            n += 1
+            std = f" (№{f.std})" if f.std else ""
+            fix = fixes.get(f.key)
+            lines += [
+                f"### {n}. `{f.key}` — {f.title}{std}",
+                "",
+                f"**Файл:** `{f.file}:{f.line}` · диагностика BSL LS:"
+                f" `{e['ls_code']}` · [карточка]({e['docs']})",
+                "",
+                "```bsl",
+                snippet(f.file, f.line),
+                "```",
+                "",
+                f"**Что не так:** {fix['why'] if fix else e['message']}",
+                "",
+            ]
+            if fix:
+                lines += ["**Как правильно:**", "", "```bsl", fix["good"], "```", ""]
+            else:
+                lines += [f"**Как правильно:** пример — по карточке правила"
+                          f" ({e['docs']}).", ""]
+    lines += ["---", "",
+              "Карточки: docs.checkbsl.org/checks/<section>/<Ключ>/; ключи без"
+              " каталога — 1c-syntax.github.io/bsl-language-server/diagnostics/<Код>/.",
+              "Срабатывания — кандидаты в findings 05a, решение за Ревьюером."]
+    return "\n".join(lines) + "\n"
+
+
 # --- вывод ----------------------------------------------------------------------------
 
 
@@ -457,6 +555,10 @@ def main(argv: Optional[List[str]] = None) -> int:
                     help="в --diff фильтровать только по файлам, не по строкам")
     ap.add_argument("--save-report", metavar="FILE",
                     help="сохранить сырой отчёт bsl-json.json в файл (отладка)")
+    ap.add_argument("--report", metavar="FILE",
+                    help="md-отчёт ревью: код с замечаниями + что не так + как правильно "
+                         "+ вердикт петли; каталог задачи создаётся (напр. "
+                         "docs/delivery/TASK-XXX/code-review/bsl-ls-r1.md)")
     args = ap.parse_args(argv)
 
     java, jar = find_java(args.java), find_jar(args.jar)
@@ -516,6 +618,20 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     print(format_json(findings, nfiles, extra) if args.format == "json"
           else format_md(findings, nfiles))
+
+    if args.report:
+        inputs = (f"--diff {args.diff}" if args.diff
+                  else ", ".join(str(p) for p in args.paths))
+        meta = {"inputs": inputs, "diff": args.diff, "round": 0}
+        report_path = Path(args.report)
+        # номер раунда петли: bsl-ls-rN.md в каталоге отчёта
+        m = re.search(r"-r(\d+)\.md$", report_path.name)
+        if m:
+            meta["round"] = int(m.group(1))
+        report_path.parent.mkdir(parents=True, exist_ok=True)
+        report_path.write_text(build_report(findings, extra, nfiles, meta),
+                               encoding="utf-8")
+        print(f"\n📄 Отчёт ревью: {report_path}")
     return 1 if any(f.sev == "red" for f in findings) else 0
 
 
