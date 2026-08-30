@@ -45,7 +45,7 @@
 
 Источники контента (см. [`docs/SOURCES.md`](./docs/SOURCES.md)):
 
-- **`zeegin/v8std`** — стандарты. Наши карточки — **адаптация**, не копия. При изменении upstream: прочитайте diff стандарта, внесите правки в `references/<card>.md`, сохраняя структуру мини-сводки. Запишите в `CHANGELOG.md` со ссылкой на коммит upstream.
+- **`zeegin/v8std`** — стандарты. Наши карточки — **адаптация**, не копия. При изменении upstream: прочитайте diff стандарта, внесите правки в `references/<card>.md`, сохраняя структуру мини-сводки. Запишите в `CHANGELOG.md` со ссылкой на коммит upstream. Расхождение оглавления `std/` с upstream отслеживается автоматически — workflow `upstream-sync` раз в квартал открывает Issue при дивергенции (локально: `python3 scripts/check_upstream_std.py`).
 - **`comol/ai_rules_1c`** — practice (public domain). Аналогично.
 - **`Nikolay-Shirokov/cc-1c-skills`** — спецификации форматов. Используем как есть, со ссылкой.
 

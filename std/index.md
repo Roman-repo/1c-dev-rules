@@ -16,5 +16,5 @@
 | Регламентные задания | [scheduled.md](scheduled.md) | 7 |
 | Интерфейс — стилистика и UX | [ux.md](ux.md) | 26 |
 | Локализация и многоязычность | [localization.md](localization.md) | 13 |
-| Интеграция и обмен данными | [integration.md](integration.md) | 6 |
+| Интеграция и обмен данными | [integration.md](integration.md) | 7 |
 | Журналирование и исключения | [logging.md](logging.md) | 4 |
