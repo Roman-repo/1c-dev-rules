@@ -211,6 +211,27 @@ class TestMagicNumber(unittest.TestCase):
         f = scan_code("Процент = Количество * 100;", allow_numbers=["100"])
         self.assertNotIn("MagicNumber", keys(f))
 
+    def test_digits_in_identifier_ok(self):
+        # живой ложняк 0.29 (торо_ЗаявкаНаРемонт:13): «20» — часть имени модуля
+        self.assertNotIn("MagicNumber", keys(scan_code(
+            "торо_ЗаполнениеДокументов20.ЗаполнениеНаОсновании(Основание, ЭтотОбъект, Ложь);")))
+
+    def test_digits_in_dotted_identifier_ok(self):
+        self.assertNotIn("MagicNumber", keys(scan_code("Значение = Поле1.Реквизит2;")))
+
+    def test_real_number_still_fires_beside_identifier(self):
+        # цифра в имени — не находка, а отдельный литерал — находка
+        f = [x for x in scan_code("Индекс2 = 55;") if x.key == "MagicNumber"]
+        self.assertEqual(len(f), 1)
+
+    def test_number_inside_multiline_query_ok(self):
+        # строки внутри многострочного литерала запроса — не код (0.29.1):
+        # цифры запроса не должны давать MagicNumber
+        code = ("Запрос.Текст = \"ВЫБРАТЬ\n"
+                "|\tСУММА(ЕСТЬNULL(Таб.Стоимость, 0) * 100) КАК Итог\n"
+                "|ИЗ Таблица КАК Таб\"")
+        self.assertNotIn("MagicNumber", keys(scan_code(code)))
+
 
 class TestScopes(unittest.TestCase):
     """scope-правила: серверный контекст и модули форм — по содержимому/пути файла."""
@@ -251,9 +272,35 @@ class TestCommentsAndStyle(unittest.TestCase):
         self.assertIn("CommentedOutCodeLine",
                       keys(scan_code("//\tЕсли Не Отказ Тогда\n//\t\tВозврат;\n//\tКонецЕсли;")))
 
+    def test_commented_out_assignment(self):
+        self.assertIn("CommentedOutCodeLine",
+                      keys(scan_code("//Объект.Дата = ТекущаяДата();")))
+
+    def test_descriptive_comment_with_assignment_text_ok(self):
+        # живой ложняк 0.29 (field-report code-review-eval): присваивание в
+        # середине описательного комментария — НЕ закомментированный код
+        self.assertNotIn("CommentedOutCodeLine", keys(scan_code(
+            '// Движения по регистру "Внешние основания для работ",'
+            ' простановка Обработано = Истина')))
+
     def test_normal_comment_ok(self):
         self.assertNotIn("CommentedOutCodeLine",
                          keys(scan_code("// Рассчитывает стоимость по формуле сметы")))
+
+    def test_doc_comment_proc_prose_ok(self):
+        # живой ложняк 0.29 (торо_ЗаявкаНаРемонт:475/739/1066): документирующий
+        # комментарий «// Процедура выполняет …» — не закомментированный код
+        for line in ('// Процедура выполняет движения документа по регистру "торо_Плановые".',
+                     '// Функция формирует таблицу плановых материальных затрат ',
+                     '// Функция формирует таблицу плановых затрат запчастей '):
+            self.assertNotIn("CommentedOutCodeLine", keys(scan_code(line)), line)
+
+    def test_commented_proc_signature_fires(self):
+        # закомментированная сигнатура (имя + скобка) — по-прежнему находка
+        self.assertIn("CommentedOutCodeLine",
+                      keys(scan_code("// Процедура ПередЗаписью(Отказ);")))
+        self.assertIn("CommentedOutCodeLine",
+                      keys(scan_code("//Функция Рассчитать(База) Экспорт")))
 
     def test_lowercase_prem(self):
         self.assertIn("StyleLowercaseПерем", keys(scan_code("перем Кэш Экспорт;")))
@@ -320,7 +367,7 @@ class TestScanPathsAndOutput(unittest.TestCase):
     def test_directory_scan_finds_bsl_only(self):
         self.write_module("src/Module.bsl", self.BAD_MODULE)
         self.write_module("src/notes.md", "# не код")
-        findings, nfiles = scanner.scan_paths([self.dir])
+        findings, nfiles, _ = scanner.scan_paths([self.dir])
         self.assertEqual(nfiles, 1)
         self.assertIn("UseQueryInALoop", keys(findings))
         self.assertIn("DeprecatedMethodMessage", keys(findings))
@@ -331,12 +378,12 @@ class TestScanPathsAndOutput(unittest.TestCase):
 
     def test_severity_order_red_first(self):
         self.write_module("Module.bsl", self.BAD_MODULE)
-        findings, _ = scanner.scan_paths([self.dir])
+        findings, _, _ = scanner.scan_paths([self.dir])
         self.assertEqual(findings[0].sev, "red")
 
     def test_md_output_counts(self):
         self.write_module("Module.bsl", self.BAD_MODULE)
-        findings, nfiles = scanner.scan_paths([self.dir])
+        findings, nfiles, _ = scanner.scan_paths([self.dir])
         md = scanner.format_md(findings, nfiles)
         self.assertIn("🔴", md)
         self.assertIn("`UseQueryInALoop`", md)
@@ -344,7 +391,7 @@ class TestScanPathsAndOutput(unittest.TestCase):
 
     def test_json_output_catalog_links(self):
         self.write_module("Module.bsl", self.BAD_MODULE)
-        findings, nfiles = scanner.scan_paths([self.dir])
+        findings, nfiles, _ = scanner.scan_paths([self.dir])
         data = json.loads(scanner.format_json(findings, nfiles))
         self.assertEqual(data["files"], 1)
         link = data["findings"][0]["catalog"]
@@ -397,6 +444,41 @@ class TestDiffMode(unittest.TestCase):
         self._git("add", "-A")  # новые файлы должны попасть в индекс, иначе git их не видит
         files = [f.name for f in scanner.diff_files("HEAD", cwd=self.repo)]
         self.assertEqual(files, ["New.bsl"])
+
+
+class TestOutputRobustness(unittest.TestCase):
+    """О3/О4 (0.29.1): broken pipe и экранирование «|» во фрагментах."""
+
+    def test_md_escape_pipe(self):
+        self.assertEqual(scanner._md_escape("| ИЗ Справочник"), "\\| ИЗ Справочник")
+
+    def test_format_md_escapes_pipe_in_fragment(self):
+        f = [scanner.Finding("K", "yellow", "t", "", "a.bsl", 1,
+                             "|\tЛЕВОЕ СОЕДИНЕНИЕ Таблица", "query")]
+        md = scanner.format_md(f, 1)
+        self.assertIn("\\|\tЛЕВОЕ СОЕДИНЕНИЕ", md)
+        # сырой «|» внутри ячейки не должен остаться (сломал бы таблицу)
+        row = [l for l in md.splitlines() if "ЛЕВОЕ СОЕДИНЕНИЕ" in l][0]
+        self.assertNotIn("`|\t", row)
+
+    def test_safe_print_survives_broken_pipe(self):
+        class BrokenStdout:
+            def write(self, s):
+                raise BrokenPipeError("pipe closed")
+
+            def flush(self):
+                raise BrokenPipeError("pipe closed")
+
+            def fileno(self):
+                raise OSError("no fd")  # fallback в devnull недоступен — тоже ок
+
+        import contextlib
+        old = sys.stdout
+        sys.stdout = BrokenStdout()
+        try:
+            scanner.safe_print("текст в закрытый пайп")  # не должно бросать
+        finally:
+            sys.stdout = old
 
 
 if __name__ == "__main__":

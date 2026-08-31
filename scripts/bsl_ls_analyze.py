@@ -60,7 +60,7 @@ import tempfile
 from functools import lru_cache
 from pathlib import Path
 from shutil import which
-from typing import Dict, List, Optional, Set, Tuple
+from typing import Dict, Iterable, List, Optional, Set, Tuple
 from urllib.parse import unquote
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -457,7 +457,8 @@ def parse_report(report: dict, targets: Optional[Set[Path]],
             std = std2 or std
             fragment = lines[line - 1].strip()[:80] if 0 < line <= len(lines) \
                 else (d.get("message", "")[:80])
-            fragment = fragment.replace("|", "/")
+            # «|» из текстов запросов НЕ заменяем здесь: фрагмент сырой,
+            # экранирование для md-таблицы — на форматировании (scan._md_escape)
             docs = (f"https://docs.checkbsl.org/checks/{section}/{key}/" if in_catalog
                     else (d.get("codeDescription") or {}).get("href", ""))
             findings.append(scan.Finding(key, sev, title, std, display_path(resolved),
@@ -499,7 +500,8 @@ def load_scan_findings(path: Path) -> Tuple[List[scan.Finding], List[dict]]:
 
 
 def merge_layer1(findings: List[scan.Finding], extra: List[dict],
-                 scan_json: Path) -> Tuple[List[scan.Finding], List[dict]]:
+                 scan_findings: List[scan.Finding],
+                 scan_extra: List[dict]) -> Tuple[List[scan.Finding], List[dict]]:
     """Слить находки слоя 1 с находками BSL LS, дедуп по (ключ, файл, строка).
 
     Слой 1 идёт первым и побеждает при совпадении: его серьёзность — напрямую
@@ -513,9 +515,8 @@ def merge_layer1(findings: List[scan.Finding], extra: List[dict],
             p = Path.cwd() / p
         return (f.key, str(p.resolve()), f.line)
 
-    sf, se = load_scan_findings(scan_json)
-    seen = {dkey(f) for f in sf}
-    mf, me = list(sf), list(se)
+    seen = {dkey(f) for f in scan_findings}
+    mf, me = list(scan_findings), list(scan_extra)
     for f, e in zip(findings, extra):
         if dkey(f) in seen:
             continue
@@ -525,6 +526,59 @@ def merge_layer1(findings: List[scan.Finding], extra: List[dict],
     pairs = sorted(zip(mf, me),
                    key=lambda p: (scan.SEV_RANK[p[0].sev], p[0].file, p[0].line))
     return [p[0] for p in pairs], [p[1] for p in pairs]
+
+
+def run_layer1(paths: List[Path], allow_numbers: Iterable[str] = ()
+               ) -> Tuple[List[scan.Finding], List[dict]]:
+    """Автозапуск слоя 1 на тех же входах (дефолт с 0.30.0, --no-merge-scan
+    отключает): находки сканера + extra в формате слоя 1."""
+    sf, _n, _sup = scan.scan_paths(paths, allow_numbers)
+    se = [{"docs": f"https://docs.checkbsl.org/checks/{f.section}/{f.key}/",
+           "message": f.title, "ls_code": "слой 1 (checkbsl_scan)",
+           "ls_severity": ""} for f in sf]
+    return sf, se
+
+
+def filter_diff_lines(findings: List[scan.Finding],
+                      ranges: Dict[Path, List[Tuple[int, int]]]
+                      ) -> List[scan.Finding]:
+    """Дифф-фильтр для находок слоя 1: как у BSL LS — только добавленные
+    строки (в --diff-режиме сканер бежит по файлам целиком)."""
+    out = []
+    for f in findings:
+        p = Path(f.file)
+        if not p.is_absolute():
+            p = Path.cwd() / p
+        try:
+            p = p.resolve()
+        except OSError:
+            pass
+        for a, b in ranges.get(p, []):
+            if a <= f.line <= b:
+                out.append(f)
+                break
+    return out
+
+
+def apply_suppressions(findings: List[scan.Finding], extra: List[dict],
+                       entries: List[dict]
+                       ) -> Tuple[List[scan.Finding], List[dict], List[dict]]:
+    """Вычесть подавления (suppress.json) из объединённых находок обоих слоёв.
+
+    Возвращает (findings, extra, подавленные записи для отчёта) — подавление
+    не молчаливое: причины попадают в md-отчёт ревью.
+    """
+    kept_f, kept_e, dropped = [], [], []
+    for f, e in zip(findings, extra):
+        hit = scan.suppression_for(f.key, f.file, f.line, entries)
+        if hit:
+            dropped.append({"key": f.key, "file": f.file, "line": f.line,
+                            "reason": hit.get("reason", ""),
+                            "author": hit.get("author", "")})
+        else:
+            kept_f.append(f)
+            kept_e.append(e)
+    return kept_f, kept_e, dropped
 
 
 # --- дифф-фильтрация ----------------------------------------------------------------
@@ -602,6 +656,9 @@ def build_report(findings: List[scan.Finding], extra: List[dict], nfiles: int,
     ]
     if meta.get("coverage"):
         lines.append(f"- Покрытие: {meta['coverage']}")
+    if meta.get("suppressed"):
+        lines.append(f"- Подавлено: {len(meta['suppressed'])} находок (--suppress,"
+                     " решения Ревьюера «не баг» — причины в конце отчёта)")
     lines += [
         f"- Вход: {meta.get('inputs', '—')}"
         + (f"; дифф: `{meta.get('diff')}` (только изменённые строки)"
@@ -648,6 +705,13 @@ def build_report(findings: List[scan.Finding], extra: List[dict], nfiles: int,
             else:
                 lines += [f"**Как правильно:** пример — по карточке правила"
                           f" ({e['docs']}).", ""]
+    if meta.get("suppressed"):
+        lines += ["", "## Подавленные (решение Ревьюера «не баг»)", "",
+                  "| Ключ | Место | Причина | Автор |",
+                  "|---|---|---|---|"]
+        for s in meta["suppressed"]:
+            lines.append(f"| `{s['key']}` | {s['file']}:{s['line']} |"
+                         f" {s['reason']} | {s['author'] or '—'} |")
     lines += ["---", "",
               "Карточки: docs.checkbsl.org/checks/<section>/<Ключ>/; ключи без"
               " каталога — 1c-syntax.github.io/bsl-language-server/diagnostics/<Код>/.",
@@ -673,14 +737,15 @@ def format_md(findings: List[scan.Finding], files: int) -> str:
             "|---|---|---|---|---|---|"]
     for i, f in enumerate(findings, start=1):
         rows.append(f"| {i} | {scan.SEV_MARK[f.sev]} | `{f.key}` | {f.std or '—'} | "
-                    f"{f.file}:{f.line} | `{f.fragment}` |")
+                    f"{f.file}:{f.line} | `{scan._md_escape(f.fragment)}` |")
     rows.append("\nКарточки: docs.checkbsl.org/checks/<section>/<Ключ>/; ключи без "
                 "каталога — 1c-syntax.github.io/bsl-language-server/diagnostics/<Ключ>/ "
                 "(ссылки — в json-выводе).")
     return head + "\n".join(rows) + "\n"
 
 
-def format_json(findings: List[scan.Finding], files: int, extra: List[dict]) -> str:
+def format_json(findings: List[scan.Finding], files: int, extra: List[dict],
+                suppressed: int = 0) -> str:
     counts = {s: sum(1 for f in findings if f.sev == s)
               for s in ("red", "yellow", "green")}
     items = []
@@ -690,7 +755,8 @@ def format_json(findings: List[scan.Finding], files: int, extra: List[dict]) -> 
                       "fragment": f.fragment, "message": e["message"],
                       "ls_code": e["ls_code"], "ls_severity": e["ls_severity"],
                       "docs": e["docs"]})
-    return json.dumps({"files": files, "counts": counts, "findings": items},
+    return json.dumps({"files": files, "counts": counts,
+                       "suppressed": suppressed, "findings": items},
                       ensure_ascii=False, indent=2)
 
 
@@ -725,7 +791,17 @@ def main(argv: Optional[List[str]] = None) -> int:
                     help="сохранить сырой отчёт bsl-json.json в файл (отладка)")
     ap.add_argument("--merge-scan", metavar="FILE",
                     help="json-вывод checkbsl_scan.py (--format json): слить находки "
-                         "слоя 1 в общий отчёт с дедупликацией по (ключ, файл, строка)")
+                    "слоя 1 в общий отчёт с дедупликацией по (ключ, файл, строка); "
+                    "по умолчанию слой 1 запускается автоматически на тех же входах")
+    ap.add_argument("--no-merge-scan", action="store_true",
+                    help="не запускать слой 1 и не сливить его находки (только BSL LS)")
+    ap.add_argument("--allow-number", action="append", default=[], metavar="N",
+                    help="исключить число N из MagicNumber слоя 1 (повторяемый); "
+                    "проектные исключения — .checkbsl_scan.json (allow-numbers)")
+    ap.add_argument("--suppress", action="append", default=[], metavar="FILE",
+                    help="suppress.json (scripts/review_suppress.py): находки с "
+                    "решением Ревьюера «не баг» исключаются из обоих слоёв "
+                    "(повторяемый)")
     ap.add_argument("--report", metavar="FILE",
                     help="md-отчёт ревью: код с замечаниями + что не так + как правильно "
                          "+ вердикт петли; каталог задачи создаётся (напр. "
@@ -748,7 +824,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         if args.diff:
             files = scan.diff_files(args.diff)
             if not files:
-                print(format_md([], 0) if args.format == "md" else format_json([], 0, []))
+                scan.safe_print(format_md([], 0) if args.format == "md"
+                                else format_json([], 0, []))
                 return 0
             targets = {f.resolve() for f in files}
             src_root = Path(args.src_root) if args.src_root else Path(
@@ -814,20 +891,44 @@ def main(argv: Optional[List[str]] = None) -> int:
             Path(args.save_report).write_text(
                 json.dumps(report, ensure_ascii=False, indent=1), encoding="utf-8")
         findings, nfiles, extra = parse_report(report, targets, ranges)
+
+        # слой 1: дефолт — автозапуск на тех же входах и слияние с дедупом
+        # (0.30.0); --merge-scan подаёт готовый json, --no-merge-scan выключает
+        merged_scan = False
         if args.merge_scan:
-            findings, extra = merge_layer1(findings, extra, Path(args.merge_scan))
+            sf, se = load_scan_findings(Path(args.merge_scan))
+            merged_scan = True
+        elif not args.no_merge_scan:
+            scan_targets = files if args.diff else [Path(p) for p in args.paths]
+            allow = scan.load_project_allow_numbers() + args.allow_number
+            sf, se = run_layer1(scan_targets, allow)
+            merged_scan = True
+        if merged_scan:
+            if ranges is not None:
+                sf = filter_diff_lines(sf, ranges)
+            findings, extra = merge_layer1(findings, extra, sf, se)
+
+        # подавления «не баг» из 05a — после слияния, к обоим слоям сразу
+        suppressed_meta: List[dict] = []
+        if args.suppress:
+            entries: List[dict] = []
+            for s in args.suppress:
+                entries.extend(scan.load_suppress(Path(s)))
+            findings, extra, suppressed_meta = apply_suppressions(
+                findings, extra, entries)
     except (FileNotFoundError, RuntimeError, json.JSONDecodeError) as e:
         print(f"❌ {e}", file=sys.stderr)
         return 2
 
-    print(format_json(findings, nfiles, extra) if args.format == "json"
-          else format_md(findings, nfiles))
+    scan.safe_print(format_json(findings, nfiles, extra, len(suppressed_meta))
+                    if args.format == "json" else format_md(findings, nfiles))
 
     if args.report:
         inputs = (f"--diff {args.diff}" if args.diff
                   else ", ".join(str(p) for p in args.paths))
         meta = {"inputs": inputs, "diff": args.diff, "round": 0,
-                "coverage": coverage, "merged_scan": bool(args.merge_scan)}
+                "coverage": coverage, "merged_scan": merged_scan,
+                "suppressed": suppressed_meta}
         report_path = Path(args.report)
         # номер раунда петли: bsl-ls-rN.md в каталоге отчёта
         m = re.search(r"-r(\d+)\.md$", report_path.name)
@@ -836,7 +937,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         report_path.parent.mkdir(parents=True, exist_ok=True)
         report_path.write_text(build_report(findings, extra, nfiles, meta),
                                encoding="utf-8")
-        print(f"\n📄 Отчёт ревью: {report_path}")
+        scan.safe_print(f"\n📄 Отчёт ревью: {report_path}")
     return 1 if any(f.sev == "red" for f in findings) else 0
 
 
