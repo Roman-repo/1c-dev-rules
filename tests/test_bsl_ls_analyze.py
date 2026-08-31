@@ -237,7 +237,8 @@ class TestMergeLayer1(unittest.TestCase):
     def test_merge_dedup_same_key_file_line(self):
         rep = report_for(self.dir, [diag("CreateQueryInCycle", 1)])  # строка 2
         findings, _, extra = wrapper.parse_report(rep, None)
-        merged, mextra = wrapper.merge_layer1(findings, extra, self._scan_json(2))
+        sf, se = wrapper.load_scan_findings(self._scan_json(2))
+        merged, mextra = wrapper.merge_layer1(findings, extra, sf, se)
         self.assertEqual(len(merged), 1)
         # побеждает слой 1: его метка в extra
         self.assertEqual(mextra[0]["ls_code"], "слой 1 (checkbsl_scan)")
@@ -245,7 +246,8 @@ class TestMergeLayer1(unittest.TestCase):
     def test_merge_adds_non_overlapping(self):
         rep = report_for(self.dir, [diag("DeprecatedMessage", 1)])
         findings, _, extra = wrapper.parse_report(rep, None)
-        merged, _ = wrapper.merge_layer1(findings, extra, self._scan_json(2))
+        sf, se = wrapper.load_scan_findings(self._scan_json(2))
+        merged, _ = wrapper.merge_layer1(findings, extra, sf, se)
         self.assertEqual(len(merged), 2)
         self.assertEqual({f.key for f in merged},
                          {"UseQueryInALoop", "DeprecatedMethodMessage"})
