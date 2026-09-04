@@ -134,17 +134,14 @@ class TestValidObjects(ValidateNewObjectCase):
         r = self.run_script(str(obj))
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
         self.assertNotIn("❌ FAIL", r.stdout)
-        self.assertIn("M1", r.stdout)
-        self.assertIn("X6", r.stdout)
-        self.assertIn("X7", r.stdout)
+        self.assertIn("metadata_scan", r.stdout)  # слой выполнен (M1/X6/X7 и др. — в нём)
 
     def test_valid_scheduled_job_exit_0(self) -> None:
         obj = self.make_scheduled_job()
         r = self.run_script(str(obj))
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
         self.assertNotIn("❌ FAIL", r.stdout)
-        self.assertIn("X8", r.stdout)   # methodName → Экспорт-метод найден
-        self.assertIn("X9", r.stdout)   # Schedule.schedule присутствует
+        self.assertIn("metadata-слой", r.stdout)  # X8/X9 переехали в слой; успех = PASS слоя
 
 
 class TestBrokenObjects(ValidateNewObjectCase):
@@ -152,16 +149,16 @@ class TestBrokenObjects(ValidateNewObjectCase):
         obj = self.make_catalog(broken=True)
         r = self.run_script(str(obj))
         self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
-        self.assertIn("M1", r.stdout)   # дубликаты UUID
-        self.assertIn("M4", r.stdout)   # нет синонима ru
-        self.assertIn("X6", r.stdout)   # не зарегистрирован в Configuration.mdo
+        self.assertIn("DuplicateUUIDInMDO", r.stdout)  # M1 в слое
+        self.assertIn("MDOWithoutSynonym", r.stdout)  # M4 в слое — ключ каталога №474
+        self.assertIn("ObjectNotInConfiguration", r.stdout)  # X6 в слое
         self.assertIn("❌ FAIL", r.stdout)
 
     def test_broken_scheduled_job_method_exit_1(self) -> None:
         obj = self.make_scheduled_job(broken=True)
         r = self.run_script(str(obj))
         self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
-        self.assertIn("X8", r.stdout)   # метод не найден в общем модуле
+        self.assertIn("ScheduledJobHandlerMissing", r.stdout)  # X8 в слое
 
 
 class TestUsageErrors(ValidateNewObjectCase):
