@@ -508,5 +508,61 @@ class TestLiveAnalysis(unittest.TestCase):
         self.assertTrue(any(f.sev == "red" for f in findings))
 
 
+class TestAutoMergeAndSuppress(unittest.TestCase):
+    """0.30.0: автозапуск слоя 1 (run_layer1), дифф-фильтр его находок и
+    подавления «не баг» из suppress.json — после слияния, к обоим слоям."""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.dir = Path(self._tmp.name)
+        self.module = self.dir / "Module.bsl"
+        self.module.write_text(
+            "Процедура П()\n"
+            "\tСообщить(\"готово\");\n"
+            "\tДля Каждого Стр Из Список Цикл\n"
+            "\t\tЗапрос.Выполнить();\n"
+            "\tКонецЦикла;\n"
+            "КонецПроцедуры\n", encoding="utf-8")
+
+    def test_run_layer1_returns_scanner_findings(self):
+        sf, se = wrapper.run_layer1([self.module])
+        self.assertEqual({f.key for f in sf},
+                         {"DeprecatedMethodMessage", "UseQueryInALoop"})
+        self.assertTrue(all(e["ls_code"] == "слой 1 (checkbsl_scan)" for e in se))
+
+    def test_filter_diff_lines_keeps_only_added(self):
+        sf, _ = wrapper.run_layer1([self.module])
+        ranges = {self.module.resolve(): [(4, 4)]}      # добавлена только строка 4
+        kept = wrapper.filter_diff_lines(sf, ranges)
+        self.assertEqual([(f.key, f.line) for f in kept],
+                         [("UseQueryInALoop", 4)])
+
+    def test_apply_suppressions_whole_file(self):
+        rep = report_for(self.dir, [diag("DeprecatedMessage", 1)])
+        findings, _, extra = wrapper.parse_report(rep, None)
+        sf, se = wrapper.run_layer1([self.module])
+        findings, extra = wrapper.merge_layer1(findings, extra, sf, se)
+        entries = [{"key": "DeprecatedMethodMessage", "file": str(self.module),
+                    "reason": "текст заглушки в тесте"}]
+        kept_f, kept_e, dropped = wrapper.apply_suppressions(
+            findings, extra, entries)
+        self.assertEqual([f.key for f in kept_f], ["UseQueryInALoop"])
+        self.assertEqual(len(dropped), 1)               # дедуп: слой 1 один раз
+        self.assertEqual(dropped[0]["reason"], "текст заглушки в тесте")
+
+    def test_report_lists_suppressed(self):
+        findings, nfiles, extra = wrapper.parse_report(
+            report_for(self.dir, []), None)
+        md = wrapper.build_report(findings, extra, nfiles, {
+            "inputs": "Module.bsl",
+            "suppressed": [{"key": "MagicNumber", "file": "Module.bsl",
+                            "line": 7, "reason": "осмысленный индекс",
+                            "author": "Roman"}]})
+        self.assertIn("Подавлено: 1 находок", md)
+        self.assertIn("## Подавленные (решение Ревьюера «не баг»)", md)
+        self.assertIn("осмысленный индекс", md)
+
+
 if __name__ == "__main__":
     unittest.main()

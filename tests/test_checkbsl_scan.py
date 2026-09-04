@@ -481,5 +481,120 @@ class TestOutputRobustness(unittest.TestCase):
             sys.stdout = old
 
 
+class TestProjectConfig(unittest.TestCase):
+    """allow-numbers из .checkbsl_scan.json проекта (0.30.0)."""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.dir = Path(self._tmp.name)
+
+    def test_missing_config_is_empty(self):
+        self.assertEqual(scanner.load_project_allow_numbers(self.dir), [])
+
+    def test_config_numbers_returned(self):
+        (self.dir / scanner.PROJECT_CONFIG).write_text(
+            json.dumps({"allow-numbers": ["100", "3600"]}), encoding="utf-8")
+        self.assertEqual(scanner.load_project_allow_numbers(self.dir),
+                         ["100", "3600"])
+
+    def test_config_numbers_silence_magic(self):
+        # e2e: allow из конфига гасит MagicNumber на «осмысленном» числе
+        module = self.dir / "Module.bsl"
+        module.write_text("ПроцентИзноса = 100;\n", encoding="utf-8")
+        (self.dir / scanner.PROJECT_CONFIG).write_text(
+            json.dumps({"allow-numbers": ["100"]}), encoding="utf-8")
+        findings, _, _ = scanner.scan_paths(
+            [module], scanner.load_project_allow_numbers(self.dir))
+        self.assertEqual(keys(findings), [])
+
+    def test_malformed_config_is_loud_error(self):
+        (self.dir / scanner.PROJECT_CONFIG).write_text(
+            json.dumps({"allow-numbers": "100"}), encoding="utf-8")
+        with self.assertRaises(RuntimeError):
+            scanner.load_project_allow_numbers(self.dir)
+
+
+class TestSuppress(unittest.TestCase):
+    """suppress.json: решения Ревьюера «не баг» вычитаются из находок (0.30.0)."""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.dir = Path(self._tmp.name)
+        self.module = self.dir / "Module.bsl"
+        self.module.write_text('Сообщить("а");\nБ = 2;\nСообщить("б");\n',
+                               encoding="utf-8")
+        # без подавлений: DeprecatedMethodMessage на строках 1 и 3
+        self.assertEqual(
+            [f.line for f in scanner.scan_paths([self.module])[0]
+             if f.key == "DeprecatedMethodMessage"], [1, 3])
+
+    def _entry(self, **kw):
+        e = {"key": "DeprecatedMethodMessage", "file": str(self.module),
+             "reason": "не баг — тест"}
+        e.update(kw)
+        return e
+
+    def test_load_suppress_validates_reason(self):
+        p = self.dir / "suppress.json"
+        p.write_text(json.dumps([{"key": "X", "file": "Y.bsl"}]),
+                     encoding="utf-8")
+        with self.assertRaises(RuntimeError):  # подавление без обоснования
+            scanner.load_suppress(p)
+
+    def test_load_suppress_rejects_non_int_line(self):
+        p = self.dir / "suppress.json"
+        p.write_text(json.dumps([self._entry(line="1")]), encoding="utf-8")
+        with self.assertRaises(RuntimeError):
+            scanner.load_suppress(p)
+
+    def test_suppress_exact_line(self):
+        findings, _, suppressed = scanner.scan_paths(
+            [self.module], suppress=[self._entry(line=1)])
+        self.assertEqual([f.line for f in findings
+                          if f.key == "DeprecatedMethodMessage"], [3])
+        self.assertEqual(len(suppressed), 1)
+        self.assertEqual(suppressed[0].line, 1)
+
+    def test_suppress_whole_file_without_line(self):
+        findings, _, suppressed = scanner.scan_paths(
+            [self.module], suppress=[self._entry(line=None)])
+        self.assertNotIn("DeprecatedMethodMessage", keys(findings))
+        self.assertEqual(len(suppressed), 2)
+
+    def test_suppress_other_key_no_effect(self):
+        findings, _, suppressed = scanner.scan_paths(
+            [self.module], suppress=[self._entry(key="MagicNumber")])
+        self.assertEqual(len(findings), 2)
+        self.assertEqual(suppressed, [])
+
+    def test_cli_flag_counts_suppressed(self):
+        import contextlib
+        import io
+        p = self.dir / "suppress.json"
+        p.write_text(json.dumps([self._entry(line=1)]), encoding="utf-8")
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            rc = scanner.main([str(self.module), "--suppress", str(p),
+                               "--format", "json"])
+        data = json.loads(out.getvalue())
+        self.assertEqual(rc, 0)                     # оставшиеся находки 🟡
+        self.assertEqual(data["suppressed"], 1)
+        self.assertEqual(len(data["findings"]), 1)
+
+    def test_cli_broken_suppress_file_exits_2(self):
+        import contextlib
+        import io
+        p = self.dir / "suppress.json"
+        p.write_text(json.dumps([{"key": "X"}]), encoding="utf-8")
+        err = io.StringIO()
+        with contextlib.redirect_stdout(io.StringIO()), \
+                contextlib.redirect_stderr(err):
+            rc = scanner.main([str(self.module), "--suppress", str(p)])
+        self.assertEqual(rc, 2)
+        self.assertIn("reason", err.getvalue())
+
+
 if __name__ == "__main__":
     unittest.main()
