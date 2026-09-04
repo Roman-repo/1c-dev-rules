@@ -20,7 +20,8 @@ from shutil import which
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT / "scripts"))
 
-import bsl_ls_analyze as wrapper  # noqa: E402  (импорт после правки sys.path)
+import bsl_ls_analyze as wrapper
+import metadata_scan as meta  # noqa: E402  (импорт после правки sys.path)
 
 
 def report_for(tmp: Path, diagnostics: list, filename: str = "Module.bsl") -> dict:
@@ -386,7 +387,8 @@ class TestReviewReport(unittest.TestCase):
         """Каждый ключ базы знаний — реальный ключ каталога, сканера или BSL LS."""
         valid = (set(wrapper.load_catalog())
                  | {r.key for r in wrapper.scan.RULES}
-                 | set(wrapper.load_ls_table()))
+                 | set(wrapper.load_ls_table())
+                 | {r.key for r in meta.CHECKS})  # metadata-слой (META-001)
         for key in wrapper.load_fixes():
             self.assertIn(key, valid, f"fix-ключ {key} не существует")
 
@@ -685,8 +687,9 @@ class TestCoverageReport(unittest.TestCase):
         l1 = {r.key for r in wrapper.scan.RULES} & set(harvest)
         l2 = (set(wrapper.load_ls_table()) & set(harvest)) \
             | {v for v in wrapper.ALIAS.values() if v in harvest}
-        covered = l1 | l2 | set(wrapper.LOCAL_CATALOG) \
+        covered = (l1 | l2 | set(wrapper.LOCAL_CATALOG)
             | set(wrapper.coverage_stats()["layer1_local"])
+            | {r.key for r in meta.CHECKS if r.kind == "catalog"})  # META-001
         fixes = set(wrapper.load_fixes())
         missing = sorted(covered - fixes)
         self.assertEqual(missing, [])

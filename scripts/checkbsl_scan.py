@@ -524,7 +524,8 @@ def diff_files(ref: str, cwd: Optional[Path] = None) -> List[Path]:
         raise RuntimeError("не в git-репозитории — git rev-parse не выполнен")
     repo = Path(root.stdout.strip())
     res = subprocess.run(
-        ["git", "-C", str(repo), "diff", "--name-only", "--diff-filter=ACMR", ref],
+        ["git", "-C", str(repo), "-c", "core.quotepath=off", "diff",
+         "--name-only", "--diff-filter=ACMR", ref],
         capture_output=True, text=True)
     if res.returncode != 0:
         raise RuntimeError(f"git diff {ref}: {res.stderr.strip()}")
