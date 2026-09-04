@@ -22,12 +22,51 @@ import argparse
 import json
 import sys
 from pathlib import Path
+from typing import List
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import bsl_ls_analyze as wrapper  # noqa: E402  (каталог + ALIAS)
 import harvest_bsl_ls as harvest  # noqa: E402  (fetch + ROW_RX)
 
 TABLE = Path(__file__).resolve().parent / "bsl_ls_diagnostics.json"
+
+RED_IMPORTANCE = ("Блокирующий", "Критичный")  # → 🔴 в IMPORTANCE_SEV обёртки
+
+
+def local_cards_check() -> List[str]:
+    """Замок локальных карточек (без сети, для CI и квартальной сверки).
+
+    Каждая немапленная 🔴-диагностика BSL LS (важность Блокирующий/Критичный,
+    вне harvest-каталога и ALIAS) должна иметь локальную карточку
+    LOCAL_CATALOG и запись «что не так / как правильно» в bsl_ls_fixes.json —
+    иначе в полном режиме находка без №/fixes, а в slim — слепота по 🔴
+    (диагностика пользователя 2026-08-31). Обратное тоже замок: карточка
+    без диагностики, без fixes или дублирующая мост — рассинхрон.
+    """
+    problems: List[str] = []
+    ls_table = wrapper.load_ls_table()
+    harvest = wrapper.load_harvest_catalog()
+    fixes = wrapper.load_fixes()
+    bridged = set(harvest) | set(wrapper.ALIAS)
+    for name, meta in ls_table.items():
+        if name in bridged or name in wrapper.LOCAL_CATALOG:
+            continue
+        if meta.get("importance") in RED_IMPORTANCE:
+            problems.append(
+                f"диагностика `{name}` ({meta.get('importance')}) немапленная и"
+                f" без локальной карточки: добавьте в LOCAL_CATALOG"
+                f" (scripts/bsl_ls_analyze.py) + запись в bsl_ls_fixes.json")
+    for name in wrapper.LOCAL_CATALOG:
+        if name not in ls_table:
+            problems.append(f"локальная карточка `{name}` без диагностики"
+                            f" в таблице BSL LS (устарела?)")
+        elif name not in fixes:
+            problems.append(f"локальная карточка `{name}` без записи"
+                            f" в bsl_ls_fixes.json («что не так» + «как правильно»)")
+        if name in harvest or name in wrapper.ALIAS:
+            problems.append(f"локальная карточка `{name}` дублирует мост"
+                            f" (карточка каталога/ALIAS) — удалите локальную")
+    return problems
 
 
 def fetch_remote() -> dict:
@@ -45,6 +84,14 @@ def main() -> int:
     ap = argparse.ArgumentParser(description="Сверка таблицы диагностик BSL LS с индексом")
     ap.add_argument("--markdown", action="store_true", help="markdown-отчёт для Issue")
     args = ap.parse_args()
+
+    # замок локальных карточек — без сети: красный прогон и в CI, и в квартальной джобе
+    card_problems = local_cards_check()
+    if card_problems:
+        print("❌ Замок локальных карточек:")
+        for p in card_problems:
+            print(f"  — {p}")
+        return 1
 
     local = json.loads(TABLE.read_text(encoding="utf-8")).get("diagnostics", {})
     try:

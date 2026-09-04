@@ -40,10 +40,11 @@
 ├── scripts/                     ← автопроверки плагина и проектов
 │   ├── delivery_tools.py        ← конвейер: status/check по артефактам 01–06 задачи, roadmap по каталогу доставки
 │   ├── checkbsl_scan.py         ← детерминированный regex-слой пакета checkbsl (~22 ключа, этап 6; файлы/каталог/--diff)
-│   ├── bsl_ls_analyze.py        ← средний слой этапа 6: bsl-language-server CLI, 129/322 правил каталога — 40% (AST); алиасы ключей на каталог, дифф по файлам/строкам; --report — md-отчёт ревью в каталог задачи
+│   ├── bsl_ls_analyze.py        ← средний слой этапа 6: bsl-language-server CLI, 129/322 правил каталога — 40% (AST), слои 1+2 — 135 (41,9%, счётчик --coverage-report); ALIAS-мост имён + LOCAL_CATALOG — локальные карточки немапленных 🔴-диагностик (№ стандарта + fixes, slim не отключает); --report — md-отчёт ревью в каталог задачи
 │   ├── bsl_ls_diagnostics.json  ← таблица диагностик BSL LS (важность/тип; регенерация — harvest_bsl_ls.py)
-│   ├── bsl_ls_fixes.json        ← база знаний «что не так / как правильно» для отчёта ревью (32 ключа, пополняется)
-│   ├── harvest_checkbsl.py      ← регенерация каталога references/checkbsl/ из docs.checkbsl.org
+│   ├── bsl_ls_fixes.json        ← база знаний «что не так / как правильно» для отчёта ревью (158 ключей, пополняется)
+│   ├── check_bsl_ls_drift.py    ← квартальная сверка таблицы диагностик с индексом BSL LS + замок локальных карточек (каждая немапленная 🔴 — с карточкой и fixes; работает и без сети)
+│   ├── harvest_checkbsl.py      ← регенерация каталога references/checkbsl/ из docs.checkbsl.org (локальные карточки — только в bsl_ls_analyze.py, каталог не трогаем)
 │   ├── harvest_bsl_ls.py        ← регенерация bsl_ls_diagnostics.json из индекса диагностик BSL LS
 │   ├── validate-new-object.sh   ← цепочки X1–X15 при ручной правке XML
 │   ├── validate_skills.py       ← структура самих скилов
@@ -94,6 +95,13 @@ license: MIT
 - references/<file>.md — что в нём
 - references/<file>.md — что в нём
 ```
+
+## Потолок детерминированных слоёв код-ревью
+
+Текущее покрытие каталога checkbsl (322 ключа) слоями 1+2: **135/322 — 41,9%**; число воспроизводится командой `python3 scripts/bsl_ls_analyze.py --coverage-report` (тест синхронизирует README и докстринг со счётчиком). Структурный потолок связки regex+AST — оценка **≈187 ключей (58%): overall ~136, metadata ~28, query ~23** (диагностика пользователя 2026-08-31). Правила сверх потолка требуют данных вне текста модуля и его AST: XML метаданных (`.mdo`), права (`.rights`), межфайловые цепочки. Следствия:
+
+- рост покрытия — **новые источники, не алиасы**: эпик «metadata-слой» ([docs/delivery/EPIC-METADATA-LAYER/](delivery/EPIC-METADATA-LAYER/00-epic-brief.md)) — парсинг `.mdo`/`.rights` → 28 metadata-ключей каталога;
+- немапленные 🔴-диагностики BSL LS закрыты **локальными карточками** `LOCAL_CATALOG` в `bsl_ls_analyze.py` (расширение каталога, не моста: у этих диагностик нет карточек docs.checkbsl.org). Карточка = название + № стандарта (если реализует, напр. `MissingTempStorageDeletion` → №642, №487) + запись в `bsl_ls_fixes.json`; slim-конфиг их не отключает; `check_bsl_ls_drift.py` держит замок «каждая немапленная 🔴-важность — с карточкой и fixes» (также в CI-тестах).
 
 ## Триггеры скилов
 

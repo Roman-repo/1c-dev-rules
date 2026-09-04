@@ -87,13 +87,26 @@ class TestAliasAndSeverity(unittest.TestCase):
 
     def test_importance_fallback(self):
         table = wrapper.load_ls_table()
-        for sev_expected in ("red", "yellow", "green"):
+        for sev_expected in ("yellow", "green"):
             sample = next(code for code, v in table.items()
                           if wrapper.IMPORTANCE_SEV[v["importance"]] == sev_expected
                           and code not in wrapper.ALIAS
                           and code not in wrapper.load_catalog())
             sev, _ = wrapper.sev_std(sample, sample)
             self.assertEqual(sev, sev_expected, f"{sample} ({table[sample]['importance']})")
+
+    def test_every_red_importance_is_bridged(self):
+        """Все 🔴-важности (Блокирующий/Критичный) покрыты мостом: каталог
+        (включая локальные карточки) или ALIAS. Красных «безкарточных» не
+        осталось — замок slim-слепоты по блокирующим (диагностика 2026-08-31);
+        целостность карточек дополнительно держит check_bsl_ls_drift.py."""
+        table = wrapper.load_ls_table()
+        bridged = set(wrapper.load_catalog()) | set(wrapper.ALIAS)
+        unbridged = sorted(
+            code for code, v in table.items()
+            if wrapper.IMPORTANCE_SEV[v["importance"]] == "red"
+            and code not in bridged)
+        self.assertEqual(unbridged, [])
 
     def test_catalog_std_used_when_no_checklist_rule(self):
         # SynchronousMethods: чек-лист сканера — 🟡 №703
@@ -562,6 +575,164 @@ class TestAutoMergeAndSuppress(unittest.TestCase):
         self.assertIn("Подавлено: 1 находок", md)
         self.assertIn("## Подавленные (решение Ревьюера «не баг»)", md)
         self.assertIn("осмысленный индекс", md)
+
+
+class TestLocalCatalog(unittest.TestCase):
+    """0.31.0: локальные карточки немапленных 🔴-диагностик BSL LS —
+    расширение каталога (не моста) для находок без карточки docs.checkbsl.org."""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.dir = Path(self._tmp.name)
+        self.module = self.dir / "Module.bsl"
+        self.module.write_text("Процедура П()\nКонецПроцедуры\n", encoding="utf-8")
+
+    def test_local_cards_are_unmapped_ls_diagnostics(self):
+        """Карточка живёт только там, где нет карточки каталога и ALIAS."""
+        harvest = wrapper.load_harvest_catalog()
+        for name, (title, std) in wrapper.LOCAL_CATALOG.items():
+            self.assertNotIn(name, harvest,
+                             f"{name}: появилась карточка каталога — удалите локальную")
+            self.assertNotIn(name, wrapper.ALIAS,
+                             f"{name}: появился алиас — удалите локальную карточку")
+            self.assertIn(name, wrapper.load_ls_table(),
+                          f"{name}: нет такой диагностики BSL LS")
+            self.assertTrue(title, f"{name}: пустое название")
+            for n in filter(None, std.split(",")):
+                self.assertTrue(n.isdigit(), f"{name}: № стандарта не число: {n}")
+
+    def test_local_cards_merged_into_catalog(self):
+        cat = wrapper.load_catalog()
+        self.assertIn("ServerCallsInFormEvents", cat)
+        self.assertEqual(cat["MissingTempStorageDeletion"][1], "642,487")
+        self.assertEqual(cat["ServerCallsInFormEvents"][2], wrapper.LOCAL_SECTION)
+        # harvest-каталог локальными не разбавляется (счётчик покрытия)
+        self.assertNotIn("ServerCallsInFormEvents", wrapper.load_harvest_catalog())
+
+    def test_local_card_finding_has_std_and_ls_docs(self):
+        self.module.write_text(
+            "Процедура П()\n\tПерем Кэш;\nКонецПроцедуры\n", encoding="utf-8")
+        rep = report_for(self.dir, [diag("CommonModuleVariables", 1)])
+        findings, _, extra = wrapper.parse_report(rep, None)
+        f = findings[0]
+        self.assertEqual(f.key, "CommonModuleVariables")
+        self.assertEqual(f.sev, "red")   # Критичный → 🔴, карточка № не даёт
+        self.assertIn("1c-syntax.github.io/bsl-language-server/diagnostics/"
+                      "CommonModuleVariables", extra[0]["docs"])
+        # № стандарта из карточки:
+        rep = report_for(self.dir, [diag("MissingTempStorageDeletion", 1)])
+        findings, _, _ = wrapper.parse_report(rep, None)
+        self.assertEqual(findings[0].std, "642,487")
+
+    def test_slim_keeps_local_cards_enabled(self):
+        """Замок slim-слепоты: локальные карточки (и вообще все 🔴-важности)
+        не попадают в off-множество slim-конфига."""
+        cfg = wrapper.slim_config(self.dir / "slim.json")
+        off = json.loads(cfg.read_text(encoding="utf-8"))["diagnostics"]["parameters"]
+        for name in wrapper.LOCAL_CATALOG:
+            self.assertNotIn(name, off)
+        for name, meta in wrapper.load_ls_table().items():
+            if wrapper.IMPORTANCE_SEV[meta["importance"]] == "red":
+                self.assertNotIn(name, off,
+                                 f"{name} ({meta['importance']}) отключена slim-ом")
+
+    def test_local_cards_have_fixes(self):
+        fixes = wrapper.load_fixes()
+        for name, entry in wrapper.LOCAL_CATALOG.items():
+            self.assertIn(name, fixes, f"{name} без fixes-записи")
+            self.assertTrue(fixes[name].get("why") and fixes[name].get("good"),
+                            f"{name}: why/good пустые")
+
+
+class TestCoverageReport(unittest.TestCase):
+    """--coverage-report: покрытие каталога — воспроизводимое число из кода."""
+
+    def test_stats_shape_and_baseline(self):
+        s = wrapper.coverage_stats()
+        self.assertEqual(s["catalog"], 322)
+        self.assertGreaterEqual(s["layer1"], 18)
+        self.assertGreaterEqual(s["layer2"], 100)
+        self.assertGreater(s["combined"], s["layer2"])  # слой 1 добавляет своё
+        self.assertEqual(s["combined"], 135)            # замок: 137 было с 2 ключами вне каталога
+        self.assertEqual(s["pct"], "41,9")
+        self.assertEqual(len(s["layer1_local"]), 2)     # правила стиля AGENTS.md
+        self.assertEqual(s["local_cards"], len(wrapper.LOCAL_CATALOG))
+
+    def test_only_catalog_keys_counted(self):
+        """В покрытии — только ключи harvest-каталога: локальные правила стиля
+        сканера и локальные карточки BSL LS знаменатель не меняют."""
+        s = wrapper.coverage_stats()
+        harvest = wrapper.load_harvest_catalog()
+        l1 = {r.key for r in wrapper.scan.RULES} & set(harvest)
+        l2 = (set(wrapper.load_ls_table()) & set(harvest)) \
+            | {v for v in wrapper.ALIAS.values() if v in harvest}
+        self.assertEqual(s["combined"], len(l1 | l2))
+
+    def test_readme_and_docstring_in_sync(self):
+        """README и докстринг держат число из счётчика — вручную не рассинхронить."""
+        s = wrapper.coverage_stats()
+        readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
+        self.assertIn(f"вместе {s['combined']}/{s['catalog']}", readme)
+        self.assertIn(f"{s['pct']}%", readme)
+        doc = wrapper.__doc__
+        self.assertIn(f"{s['combined']} ключей", doc)
+
+    def test_fixes_cover_every_deterministic_key(self):
+        """Гарантия 0.29+: каждая детерминированная находка несёт «что не так»
+        и «как правильно» — включая локальные карточки и стиль-правила."""
+        harvest = wrapper.load_harvest_catalog()
+        l1 = {r.key for r in wrapper.scan.RULES} & set(harvest)
+        l2 = (set(wrapper.load_ls_table()) & set(harvest)) \
+            | {v for v in wrapper.ALIAS.values() if v in harvest}
+        covered = l1 | l2 | set(wrapper.LOCAL_CATALOG) \
+            | set(wrapper.coverage_stats()["layer1_local"])
+        fixes = set(wrapper.load_fixes())
+        missing = sorted(covered - fixes)
+        self.assertEqual(missing, [])
+
+    def test_cli_flag_without_java(self):
+        import contextlib
+        import io
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            rc = wrapper.main(["--coverage-report",
+                               "--java", "/nonexistent-java",
+                               "--jar", "/nonexistent.jar"])
+        self.assertEqual(rc, 0)
+        self.assertIn(f"{wrapper.coverage_stats()['combined']}/"
+                      f"{wrapper.coverage_stats()['catalog']}", out.getvalue())
+
+
+class TestDriftLocalCardsLock(unittest.TestCase):
+    """check_bsl_ls_drift.local_cards_check: замок «карточка + fixes» для
+    немапленных 🔴 (вызывается и из CI-теста, и из квартальной сверки)."""
+
+    def test_lock_passes_on_current_state(self):
+        import check_bsl_ls_drift
+        self.assertEqual(check_bsl_ls_drift.local_cards_check(), [])
+
+    def test_lock_catches_missing_card(self):
+        import check_bsl_ls_drift
+        saved = dict(wrapper.LOCAL_CATALOG)
+        try:
+            wrapper.LOCAL_CATALOG.pop("ServerCallsInFormEvents")
+            problems = check_bsl_ls_drift.local_cards_check()
+            self.assertTrue(any("ServerCallsInFormEvents" in p for p in problems))
+        finally:
+            wrapper.LOCAL_CATALOG.clear()
+            wrapper.LOCAL_CATALOG.update(saved)
+
+    def test_lock_catches_card_without_fixes(self):
+        import check_bsl_ls_drift
+        fixes = wrapper.load_fixes()
+        saved_fix = fixes.pop("UseLessForEach")
+        try:
+            # load_fixes отдаёт тот же кэшированный словарь — правка видна замку
+            problems = check_bsl_ls_drift.local_cards_check()
+            self.assertTrue(any("UseLessForEach" in p for p in problems))
+        finally:
+            fixes["UseLessForEach"] = saved_fix
 
 
 if __name__ == "__main__":

@@ -5,11 +5,14 @@ bsl_ls_analyze.py — ядро полноты пакета checkbsl: bsl-languag
 в режиме analyze, средний слой этапа «Код ревью» (1c-code-review) между
 regex-сканером checkbsl_scan.py и ручным проходом Ревьюера по каталогу.
 
-Зачем: сканер (слой 1) детерминированно закрывает 22 текстовых ключа каталога,
-ИИ-проход по каталогу вероятностен (~60–70% номинально). Слой 2 (BSL LS)
-детерминированно закрывает 129 ключей каталога из 322 (40%) через прямые
-совпадения и таблицу ALIAS; слой 1 ∪ слой 2 — 137 ключей (42,5%, измерено
-на 0.29.0). Остальные ~185 ключей каталога — за чек-листом и ручным проходом.
+Зачем: сканер (слой 1) детерминированно закрывает 20 ключей каталога (+2
+локальных правила стиля вне каталога), ИИ-проход по каталогу вероятностен
+(~60–70% номинально). Слой 2 (BSL LS) детерминированно закрывает 129 ключей
+каталога из 322 (40%) через прямые совпадения и таблицу ALIAS; слой 1 ∪ слой 2
+— 135 ключей (41,9%; счётчик: --coverage-report). Остальные ключи каталога —
+за чек-листом и ручным проходом. Немапленные 🔴-диагностики BSL LS (важность
+Блокирующий/Критичный) получают локальные карточки LOCAL_CATALOG — № стандарта
+и fixes без карточки docs.checkbsl.org.
 Слои: сканер → BSL LS (этот скрипт) → чек-лист/каталог.
 На машинах без Java остаётся слой 1.
 
@@ -197,6 +200,45 @@ ALIAS: Dict[str, str] = {
     "ExecuteExternalCodeInCommonModule": "ExecuteExport",
 }
 
+# Локальные карточки немапленных 🔴-диагностик BSL LS (диагностика пользователя
+# 2026-08-31: в полном режиме такие находки идут без № стандарта и fixes,
+# в slim — молча отключаются, т.е. слепота по блокирующим). Это расширение
+# КАТАЛОГА, не моста: у диагностик нет карточек на docs.checkbsl.org, поэтому
+# карточка живёт здесь — код BSL LS → (название, №№ стандартов через запятую;
+# пусто — стандарта нет, важность BSL LS даёт серьёзность). Подмешиваются в
+# load_catalog() со секцией "local": находка получает № стандарта и запись
+# bsl_ls_fixes.json, ссылка ведёт на документацию BSL LS, slim_config их
+# НЕ отключает. Целостность держат check_bsl_ls_drift.py (замок: каждая
+# немапленная 🔴-важность — с карточкой и fixes-записью) и тесты.
+LOCAL_CATALOG: Dict[str, Tuple[str, str]] = {
+    # важность «Блокирующий»
+    "CommonModuleAssign": ("Присвоение значения общему модулю", ""),
+    "ForbiddenMetadataName": ("Объекту метаданных присвоено запрещённое имя", "474"),
+    "GlobalContextMethodCollision8312":
+        ("Конфликт имён методов с методами глобального контекста", ""),
+    "MissingEventSubscriptionHandler": ("Отсутствует обработчик подписки на событие", ""),
+    "ThisObjectAssign": ("Присвоение значения свойству ЭтотОбъект", ""),
+    "WrongUseFunctionProceedWithCall": ("Некорректное использование функции ПродолжитьВызов()", ""),
+    # важность «Критичный»
+    "CommonModuleVariables": ("Объявление переменных в общем модуле", ""),
+    "MissingTempStorageDeletion":
+        ("Отсутствует удаление данных из временного хранилища после использования",
+         "642,487"),
+    "MultilineStringInQuery": ("Многострочный литерал в запросе", ""),
+    "ScheduledJobHandler": ("Обработчик регламентного задания", ""),
+    "ServerCallsInFormEvents": ("Серверные вызовы в событиях форм", ""),
+    "SetPermissionsForNewObjects":
+        ("Флажок «Устанавливать права для новых объектов» — только у роли ПолныеПрава",
+         "532"),
+    "UseLessForEach": ("Бесполезный перебор коллекции", ""),
+    "UsingExternalCodeTools": ("Использование возможностей выполнения внешнего кода", "669"),
+    "WrongDataPathForFormElements": ("У полей формы не указан путь к данным", "467"),
+    "WrongHttpServiceHandler": ("Неверно задан обработчик метода http-сервиса", ""),
+    "WrongWebServiceHandler": ("Неверно задан обработчик операции web-сервиса", ""),
+}
+
+LOCAL_SECTION = "local"  # секция локальных карточек; docs-ссылка — на BSL LS
+
 # Важность BSL LS (индекс диагностик) → серьёзность findings, когда ключ не
 # покрыт чек-листом сканера и каталогом. Приоритет всегда за чек-листом.
 IMPORTANCE_SEV = {"Блокирующий": "red", "Критичный": "red",
@@ -210,10 +252,15 @@ RULE_SEV = {r.key: (r.sev, r.std) for r in scan.RULES}
 
 
 @lru_cache(maxsize=1)
-def load_catalog() -> Dict[str, Tuple[str, str, str]]:
-    """Ключ каталога checkbsl → (название, №№ стандартов, секция) из references/checkbsl/."""
+def load_harvest_catalog() -> Dict[str, Tuple[str, str, str]]:
+    """Ключ каталога checkbsl → (название, №№ стандартов, секция) из
+    references/checkbsl/ — только карточки docs.checkbsl.org (322 ключа).
+    Отдельно от load_catalog(): счётчик покрытия и замок drift считают
+    каталог, локальные карточки LOCAL_CATALOG в него НЕ входят."""
     out: Dict[str, Tuple[str, str, str]] = {}
     for md in sorted(CATALOG_DIR.glob("*.md")):
+        if md.stem == LOCAL_SECTION:
+            continue  # локальные карточки подмешивает load_catalog()
         for line in md.read_text(encoding="utf-8").splitlines():
             if not line.startswith("| `"):
                 continue
@@ -224,6 +271,16 @@ def load_catalog() -> Dict[str, Tuple[str, str, str]]:
             std = ",".join(re.findall(r"№(\d+)", cells[3]))
             m = re.search(r"/checks/(\w+)/", cells[5])
             out[key] = (cells[1], std, m.group(1) if m else "overall")
+    return out
+
+
+@lru_cache(maxsize=1)
+def load_catalog() -> Dict[str, Tuple[str, str, str]]:
+    """Harvest-каталог ∪ локальные карточки (секция "local"): всё, что даёт
+    находке № стандарта, название и fixes. Служебное (slim, resolve_key,
+    sev_std) работает на объединении."""
+    out: Dict[str, Tuple[str, str, str]] = dict(load_harvest_catalog())
+    out.update({k: (t, s, LOCAL_SECTION) for k, (t, s) in LOCAL_CATALOG.items()})
     return out
 
 
@@ -240,6 +297,72 @@ def load_fixes() -> Dict[str, dict]:
     для отчёта ревью. Пополняется по находкам живых ревью."""
     data = json.loads(FIXES.read_text(encoding="utf-8"))
     return {k: v for k, v in data.items() if not k.startswith("_")}
+
+
+# --- счётчик покрытия каталога (--coverage-report) -----------------------------------
+
+
+def coverage_stats() -> Dict[str, object]:
+    """Покрытие каталога checkbsl детерминированными слоями — из кода.
+
+    Число для доков/README считается здесь, а не руками (диагностика
+    пользователя 2026-08-31: «42,5% (137/322)» было ручным и включало 2
+    ключа сканера вне каталога). Знаменатель — harvest-каталог (322);
+    локальные карточки LOCAL_CATALOG — карточки диагностик BSL LS,
+    а не ключи каталога, в покрытие каталога не входят.
+    """
+    harvest = load_harvest_catalog()
+    ls_table = load_ls_table()
+    layer1 = {r.key for r in scan.RULES}
+    layer1_local = sorted(layer1 - set(harvest))   # правила стиля AGENTS.md
+    layer1 &= set(harvest)
+    layer2 = (set(ls_table) & set(harvest)) \
+        | {v for v in ALIAS.values() if v in harvest}
+    combined = layer1 | layer2
+    sections = {"overall": 0, "query": 0, "metadata": 0}
+    catalog_sections = dict(sections)
+    for k, (_t, _s, sec) in harvest.items():
+        catalog_sections[sec] = catalog_sections.get(sec, 0) + 1
+    for k in combined:
+        sections[harvest[k][2]] = sections.get(harvest[k][2], 0) + 1
+    return {
+        "catalog": len(harvest),
+        "catalog_sections": catalog_sections,
+        "layer1": len(layer1),
+        "layer1_local": layer1_local,
+        "layer2": len(layer2),
+        "alias_pairs": len(ALIAS),
+        "combined": len(combined),
+        "pct": f"{100 * len(combined) / len(harvest):.1f}".replace(".", ","),
+        "sections": sections,
+        "local_cards": len(LOCAL_CATALOG),
+    }
+
+
+def format_coverage_report() -> str:
+    """Человекочитаемый вывод --coverage-report (+ строка для README)."""
+    s = coverage_stats()
+    cat_sec = s["catalog_sections"]
+    cov_sec = s["sections"]
+    return "\n".join([
+        f"Каталог checkbsl (references/checkbsl/): {s['catalog']} ключей "
+        f"(overall {cat_sec.get('overall', 0)} / query {cat_sec.get('query', 0)}"
+        f" / metadata {cat_sec.get('metadata', 0)})",
+        f"Слой 1 (checkbsl_scan.py): {s['layer1']} ключей каталога"
+        + (f" + {len(s['layer1_local'])} локальных правил стиля вне каталога"
+           f" ({', '.join(s['layer1_local'])})" if s["layer1_local"] else ""),
+        f"Слой 2 (bsl_ls_analyze.py, прямые + ALIAS {s['alias_pairs']} пар):"
+        f" {s['layer2']} ключей",
+        f"Вместе (1 ∪ 2): {s['combined']}/{s['catalog']} = {s['pct']}%"
+        f" [из покрытых: overall {cov_sec.get('overall', 0)}"
+        f" / query {cov_sec.get('query', 0)} / metadata {cov_sec.get('metadata', 0)}]",
+        f"Локальные карточки немапленных 🔴-диагностик BSL LS:"
+        f" {s['local_cards']} (замок: check_bsl_ls_drift.py)",
+        "",
+        f"Строка для README: «вместе {s['combined']}/{s['catalog']} —"
+        f" {s['pct']}% (счётчик: python3 scripts/bsl_ls_analyze.py"
+        " --coverage-report)»",
+    ])
 
 
 # --- поиск java и jar -------------------------------------------------------------
@@ -459,8 +582,15 @@ def parse_report(report: dict, targets: Optional[Set[Path]],
                 else (d.get("message", "")[:80])
             # «|» из текстов запросов НЕ заменяем здесь: фрагмент сырой,
             # экранирование для md-таблицы — на форматировании (scan._md_escape)
-            docs = (f"https://docs.checkbsl.org/checks/{section}/{key}/" if in_catalog
-                    else (d.get("codeDescription") or {}).get("href", ""))
+            if key in LOCAL_CATALOG:
+                # локальная карточка: docs.checkbsl.org страницы нет — ведём
+                # на документацию диагностики BSL LS
+                docs = (f"https://1c-syntax.github.io/bsl-language-server"
+                        f"/diagnostics/{code}/")
+            elif in_catalog:
+                docs = f"https://docs.checkbsl.org/checks/{section}/{key}/"
+            else:
+                docs = (d.get("codeDescription") or {}).get("href", "")
             findings.append(scan.Finding(key, sev, title, std, display_path(resolved),
                                          line, fragment, section))
             extra.append({"docs": docs, "message": d.get("message", ""),
@@ -802,11 +932,22 @@ def main(argv: Optional[List[str]] = None) -> int:
                     help="suppress.json (scripts/review_suppress.py): находки с "
                     "решением Ревьюера «не баг» исключаются из обоих слоёв "
                     "(повторяемый)")
+    ap.add_argument("--coverage-report", action="store_true",
+                    help="посчитать покрытие каталога checkbsl детерминированными"
+                         " слоями (без запуска анализа; число для README) и выйти")
     ap.add_argument("--report", metavar="FILE",
                     help="md-отчёт ревью: код с замечаниями + что не так + как правильно "
                          "+ вердикт петли; каталог задачи создаётся (напр. "
                          "docs/delivery/TASK-XXX/code-review/bsl-ls-r1.md)")
     args = ap.parse_args(argv)
+
+    if args.coverage_report:
+        # без Java и входов: чистый пересчёт по каталогу/сканеру/таблице
+        if args.format == "json":
+            print(json.dumps(coverage_stats(), ensure_ascii=False, indent=2))
+        else:
+            print(format_coverage_report())
+        return 0
 
     java, jar = find_java(args.java), find_jar(args.jar)
     if not (java and jar):
