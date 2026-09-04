@@ -654,8 +654,9 @@ def next_step(state: TaskState) -> List[str]:
 
 def stage_reached(state: TaskState) -> int:
     """Номер достигнутого этапа (8-этапная модель, 0.23.0): 01→1; 02/03/04→2;
-    04a→3 (Согласование); 05→5 (этап 4 «Разработка» файлового маркера не имеет —
-    известный пробел, самопрогоны в шапке 05); 05a→6 (Код ревью); протокол→7,
+    04a→3 (Согласование); «Согласовано» в 04a →4 (гейт 3→4 пройден — идёт
+    «Разработка»; отдельного файлового маркера этапу не нужно, самопрогоны
+    разработки — в шапке 05); 05→5; 05a→6 (Код ревью); протокол→7,
     «принято»→8. 0 — артефактов нет."""
     reached = 0
     if (state.task_dir / ARTIFACTS[1]).is_file():
@@ -664,6 +665,9 @@ def stage_reached(state: TaskState) -> int:
         reached = max(reached, 2)
     if (state.task_dir / DESIGN_REVIEW).is_file():
         reached = max(reached, 3)
+        approval = state.approval
+        if approval is not None and approval.decision == "Согласовано":
+            reached = max(reached, 4)
     if (state.task_dir / ARTIFACTS[5]).is_file():
         reached = max(reached, 5)
     if (state.task_dir / CODE_REVIEW).is_file():
