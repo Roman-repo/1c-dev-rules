@@ -390,8 +390,19 @@ class TestOrchestratorApproval(unittest.TestCase):
             code, out = run_cli("status", task)
             self.assertEqual(code, 0)
             self.assertIn("Согласование: ✅ Согласовано, 2026-08-23 (режим manual; 04a)", out)
-            self.assertIn('3 «Согласование»', out)                             # этап по 04a
+            # «Согласовано» = гейт 3→4 пройден: этап 4 «Разработка» (0.31.1,
+            # полевое наблюдение 2026-08-22: статус перепрыгивал 3 → 5)
+            self.assertIn('4 «Разработка»', out)
             self.assertIn("Разработка (1c-dispatch-gate)", out)                 # следующий шаг — код
+
+    def test_rework_decision_keeps_stage_three(self):
+        """«Доработать» в 04a — гейт 3→4 не пройден, этап остаётся 3."""
+        with tempfile.TemporaryDirectory() as tmp:
+            task = self.make_task(tmp, self.REVIEW_REWORK)
+            code, out = run_cli("status", task)
+        self.assertEqual(code, 0)
+        self.assertIn('3 «Согласование»', out)
+        self.assertIn("без кода до повторного согласования", out)
 
     def test_missing_review_is_warn_not_err(self):
         """Задачи до 0.19.0: ни 04a, ни штампа — WARN, конвейер не блокируется."""
