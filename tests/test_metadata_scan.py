@@ -669,3 +669,67 @@ class TestCli(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestIndexCache(unittest.TestCase):
+    """META-002: кэш индекса проектного обхода — hit/инвалидация/битый файл.
+    Кэш — ускоритель, не источник истины: любое сомнение → обход заново."""
+
+    def setUp(self):
+        self.t = Tree()
+        self.t.catalog()
+        self.t.role()
+        self.t.subsystem()
+        self.cache = self.t.root / "cache"
+        self.cache.mkdir()
+        self.objects = meta.collect_mdo([self.t.src])
+
+    def _ctx(self) -> meta.Context:
+        ctx = meta.Context(self.t.src, self.objects, cache_dir=self.cache)
+        ctx.rights_tokens  # свойство триггерит _prime
+        return ctx
+
+    def test_prime_writes_cache_file(self):
+        self.assertEqual(list(self.cache.iterdir()), [])
+        ctx = self._ctx()
+        files = list(self.cache.iterdir())
+        self.assertEqual(len(files), 1)
+        self.assertTrue(files[0].name.startswith("metadata-index-"))
+        # индекс построен обходом: токен роли из Roles/ присутствует
+        self.assertIn("Catalog.ТестСправочник", ctx.rights_tokens)
+
+    def test_cache_hit_loads_sentinel(self):
+        """Доказательство загрузки из кэша: файл с текущим ключом содержит
+        метку, которую обход дерева дать не может."""
+        ctx = meta.Context(self.t.src, self.objects, cache_dir=self.cache)
+        key = ctx._tree_key()               # _tree_key не праймит индекс
+        fake = self.cache / f"metadata-index-{key[:24]}.json"
+        fake.write_text(json.dumps({
+            "uuid_files": {}, "rights_tokens": ["Catalog.СентинелИзКэша"],
+            "subsystem_hits": [], "have_roles": True, "have_subs": True,
+        }), encoding="utf-8")
+        ctx.rights_tokens                    # hit — метка видна
+        self.assertIn("Catalog.СентинелИзКэша", ctx.rights_tokens)
+
+    def test_tree_change_invalidates_cache(self):
+        self._ctx()                          # индекс записан
+        import os
+        mdo_file = next(self.t.src.rglob("*.mdo"))
+        stamp = mdo_file.stat().st_mtime_ns + 10**9
+        os.utime(mdo_file, ns=(stamp, stamp))   # правка меняет mtime
+        ctx = self._ctx()                   # miss → обход заново
+        self.assertNotIn("Catalog.СентинелИзКэша", ctx.rights_tokens)
+        self.assertEqual(len(list(self.cache.iterdir())), 2)  # старый + новый
+
+    def test_broken_cache_rebuilds(self):
+        self._ctx()
+        cached = next(self.cache.iterdir())
+        cached.write_text("{битый json", encoding="utf-8")
+        ctx = self._ctx()                   # битый → обход, не падение
+        self.assertIn("Catalog.ТестСправочник", ctx.rights_tokens)
+
+    def test_without_cache_dir_no_files(self):
+        ctx = meta.Context(self.t.src, self.objects)
+        ctx.rights_tokens
+        self.assertIn("Catalog.ТестСправочник", ctx.rights_tokens)
+        self.assertEqual(list(self.cache.iterdir()), [])

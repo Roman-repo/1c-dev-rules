@@ -8,13 +8,15 @@ regex-сканером checkbsl_scan.py и ручным проходом Рев�
 Зачем: сканер (слой 1) детерминированно закрывает 20 ключей каталога (+2
 локальных правила стиля вне каталога), ИИ-проход по каталогу вероятностен
 (~60–70% номинально). Слой 2 (BSL LS) детерминированно закрывает 129 ключей
-каталога из 322 (40%) через прямые совпадения и таблицу ALIAS; слой 1 ∪ слой 2
-— 135 ключей (41,9%; счётчик: --coverage-report). Остальные ключи каталога —
-за чек-листом и ручным проходом. Немапленные 🔴-диагностики BSL LS (важность
-Блокирующий/Критичный) получают локальные карточки LOCAL_CATALOG — № стандарта
-и fixes без карточки docs.checkbsl.org.
-Слои: сканер → BSL LS (этот скрипт) → чек-лист/каталог.
-На машинах без Java остаётся слой 1.
+каталога из 322 (40%) через прямые совпадения и таблицу ALIAS; слой
+метаданных (metadata_scan.py, XML .mdo/.rights — META-002) — ещё 16;
+слои 1 ∪ 2 ∪ метаданные — 149 ключей (46,3%; счётчик: --coverage-report).
+Остальные ключи каталога — за чек-листом и ручным проходом. Немапленные
+🔴-диагностики BSL LS (важность Блокирующий/Критичный) получают локальные
+карточки LOCAL_CATALOG — № стандарта и fixes без карточки docs.checkbsl.org.
+Слои: сканер + BSL LS + метаданные (этот скрипт запускает все три на одних
+входах и сливает в один отчёт) → чек-лист/каталог.
+На машинах без Java работают слой 1 и metadata-слой по отдельности.
 
 Ключи BSL LS и каталога checkbsl — разные системы имён (совпадают напрямую
 только ~23): соответствие даёт таблица ALIAS ниже (сверена по формулировкам
@@ -68,6 +70,7 @@ from urllib.parse import unquote
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import checkbsl_scan as scan  # noqa: E402  (общий слой: Finding, RULES, diff_files, read_text)
+import metadata_scan as meta_scan  # noqa: E402  (слой 3: XML метаданных, META-002)
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 CATALOG_DIR = REPO_ROOT / "skills" / "1c-code-review" / "references" / "checkbsl"
@@ -309,7 +312,8 @@ def coverage_stats() -> Dict[str, object]:
     пользователя 2026-08-31: «42,5% (137/322)» было ручным и включало 2
     ключа сканера вне каталога). Знаменатель — harvest-каталог (322);
     локальные карточки LOCAL_CATALOG — карточки диагностик BSL LS,
-    а не ключи каталога, в покрытие каталога не входят.
+    а не ключи каталога, в покрытие каталога не входят. С META-002 в
+    combined входит metadata-слой (каталогные ключи CHECKS, без Java).
     """
     harvest = load_harvest_catalog()
     ls_table = load_ls_table()
@@ -318,7 +322,9 @@ def coverage_stats() -> Dict[str, object]:
     layer1 &= set(harvest)
     layer2 = (set(ls_table) & set(harvest)) \
         | {v for v in ALIAS.values() if v in harvest}
-    combined = layer1 | layer2
+    meta_layer = {r.key for r in meta_scan.CHECKS
+                  if r.kind == "catalog"} & set(harvest)
+    combined = layer1 | layer2 | meta_layer
     sections = {"overall": 0, "query": 0, "metadata": 0}
     catalog_sections = dict(sections)
     for k, (_t, _s, sec) in harvest.items():
@@ -331,6 +337,7 @@ def coverage_stats() -> Dict[str, object]:
         "layer1": len(layer1),
         "layer1_local": layer1_local,
         "layer2": len(layer2),
+        "meta_layer": len(meta_layer),
         "alias_pairs": len(ALIAS),
         "combined": len(combined),
         "pct": f"{100 * len(combined) / len(harvest):.1f}".replace(".", ","),
@@ -353,7 +360,9 @@ def format_coverage_report() -> str:
            f" ({', '.join(s['layer1_local'])})" if s["layer1_local"] else ""),
         f"Слой 2 (bsl_ls_analyze.py, прямые + ALIAS {s['alias_pairs']} пар):"
         f" {s['layer2']} ключей",
-        f"Вместе (1 ∪ 2): {s['combined']}/{s['catalog']} = {s['pct']}%"
+        f"Слой метаданных (metadata_scan.py, каталогные из CHECKS):"
+        f" {s['meta_layer']} ключей",
+        f"Вместе (1 ∪ 2 ∪ metadata): {s['combined']}/{s['catalog']} = {s['pct']}%"
         f" [из покрытых: overall {cov_sec.get('overall', 0)}"
         f" / query {cov_sec.get('query', 0)} / metadata {cov_sec.get('metadata', 0)}]",
         f"Локальные карточки немапленных 🔴-диагностик BSL LS:"
@@ -629,15 +638,15 @@ def load_scan_findings(path: Path) -> Tuple[List[scan.Finding], List[dict]]:
     return findings, extra
 
 
-def merge_layer1(findings: List[scan.Finding], extra: List[dict],
-                 scan_findings: List[scan.Finding],
-                 scan_extra: List[dict]) -> Tuple[List[scan.Finding], List[dict]]:
-    """Слить находки слоя 1 с находками BSL LS, дедуп по (ключ, файл, строка).
+def merge_layers(*layers: Tuple[List[scan.Finding], List[dict]]
+                 ) -> Tuple[List[scan.Finding], List[dict]]:
+    """Слить находки слоёв, дедуп по (ключ, файл, строка).
 
-    Слой 1 идёт первым и побеждает при совпадении: его серьёзность — напрямую
-    из чек-листа, а формулировки совпадают с отчётом сканера. Пути для ключа
-    дедупа нормализуются до абсолютных (слой 1 и обёртка могут печатать
-    разные формы одного пути).
+    Порядок аргументов = приоритет при коллизии: слой, указанный раньше,
+    побеждает (metadata → слой 1 → BSL LS: у metadata-находок № стандарта
+    точнее, у слоя 1 серьёзность напрямую из чек-листа). Пути для ключа
+    дедупа нормализуются до абсолютных (слои могут печатать разные формы
+    одного пути).
     """
     def dkey(f: scan.Finding) -> Tuple[str, str, int]:
         p = Path(f.file)
@@ -645,17 +654,27 @@ def merge_layer1(findings: List[scan.Finding], extra: List[dict],
             p = Path.cwd() / p
         return (f.key, str(p.resolve()), f.line)
 
-    seen = {dkey(f) for f in scan_findings}
-    mf, me = list(scan_findings), list(scan_extra)
-    for f, e in zip(findings, extra):
-        if dkey(f) in seen:
-            continue
-        seen.add(dkey(f))
-        mf.append(f)
-        me.append(e)
+    seen: Set[Tuple[str, str, int]] = set()
+    mf: List[scan.Finding] = []
+    me: List[dict] = []
+    for findings, extra in layers:
+        for f, e in zip(findings, extra):
+            if dkey(f) in seen:
+                continue
+            seen.add(dkey(f))
+            mf.append(f)
+            me.append(e)
     pairs = sorted(zip(mf, me),
                    key=lambda p: (scan.SEV_RANK[p[0].sev], p[0].file, p[0].line))
     return [p[0] for p in pairs], [p[1] for p in pairs]
+
+
+def merge_layer1(findings: List[scan.Finding], extra: List[dict],
+                 scan_findings: List[scan.Finding],
+                 scan_extra: List[dict]) -> Tuple[List[scan.Finding], List[dict]]:
+    """Слить находки слоя 1 с находками BSL LS (слой 1 побеждает при
+    совпадении) — обёртка над merge_layers для совместимости."""
+    return merge_layers((scan_findings, scan_extra), (findings, extra))
 
 
 def run_layer1(paths: List[Path], allow_numbers: Iterable[str] = ()
@@ -667,6 +686,74 @@ def run_layer1(paths: List[Path], allow_numbers: Iterable[str] = ()
            "message": f.title, "ls_code": "слой 1 (checkbsl_scan)",
            "ls_severity": ""} for f in sf]
     return sf, se
+
+
+# --- слой метаданных (META-002) ----------------------------------------------------
+
+
+META_LAYER_MARK = "слой метаданных (metadata_scan)"
+
+
+def meta_findings_to_pool(findings: List[meta_scan.Finding]
+                          ) -> Tuple[List[scan.Finding], List[dict]]:
+    """Находки metadata-слоя в общий пул обёртки: scan.Finding + extra.
+
+    Каталогные ключи получают section="metadata" и карточку docs.checkbsl.org;
+    локальные структурные — без карточки (наследие X/M-цепочек bash).
+    message = detail («что не так» слоя), метка слоя — ls_code.
+    """
+    out_f: List[scan.Finding] = []
+    out_e: List[dict] = []
+    for f in findings:
+        catalog_kind = f.kind == "catalog"
+        out_f.append(scan.Finding(f.key, f.sev, f.title, f.std or "",
+                                  display_path(Path(f.file)), f.line,
+                                  f.fragment,
+                                  "metadata" if catalog_kind else "local"))
+        out_e.append({
+            "docs": (f"https://docs.checkbsl.org/checks/metadata/{f.key}/"
+                     if catalog_kind else ""),
+            "message": f.detail or f.title,
+            "ls_code": META_LAYER_MARK,
+            "ls_severity": "",
+        })
+    return out_f, out_e
+
+
+def load_metadata_findings(path: Path) -> Tuple[List[scan.Finding], List[dict]]:
+    """Находки metadata-слоя из json-вывода metadata_scan.py (--merge-metadata)."""
+    data = json.loads(path.read_text(encoding="utf-8"))
+    pool: List[meta_scan.Finding] = []
+    for d in data.get("findings", []):
+        pool.append(meta_scan.Finding(d["key"], d["severity"], d["title"],
+                                      d.get("std") or "", d.get("kind", "local"),
+                                      d["file"], d["line"], d.get("fragment", ""),
+                                      d.get("detail") or ""))
+    return meta_findings_to_pool(pool)
+
+
+def run_metadata(ref: Optional[str], paths: List[Path],
+                 src_root: Optional[Path] = None,
+                 cache_dir: Optional[Path] = None
+                 ) -> Tuple[List[scan.Finding], List[dict], bool]:
+    """Автозапуск metadata-слоя на тех же входах (дефолт с META-002,
+    --no-merge-metadata отключает): XML метаданных → общий пул обёртки.
+
+    Подавления НЕ применяются здесь — единая точка у обёртки, после слияния
+    слоёв. Возвращает (findings, extra, был ли слой запущен): пустые входы
+    (нет .mdo/.rights — отклонение 1а) дают ([], [], False) без шума.
+    """
+    inputs = meta_scan.diff_paths(ref) if ref is not None else list(paths)
+    if not inputs:
+        return [], [], False
+    objects = meta_scan.collect_mdo(inputs)
+    if not objects:
+        return [], [], False
+    root = src_root or meta_scan.infer_src_root(objects, None)
+    ctx = meta_scan.Context(root, objects, cache_dir=cache_dir)
+    mf, _suppressed = meta_scan.scan(objects, ctx, [])
+    findings, extra = meta_findings_to_pool(mf)
+    return findings, extra, True
 
 
 def filter_diff_lines(findings: List[scan.Finding],
@@ -776,15 +863,22 @@ def build_report(findings: List[scan.Finding], extra: List[dict], nfiles: int,
     fixes = load_fixes()
     counts = {s: sum(1 for f in findings if f.sev == s)
               for s in ("red", "yellow", "green")}
+    if meta.get("bsl_ran", True):
+        layer_line = (f"- Слой: bsl-language-server (AST), файлов разобрано:"
+                      f" {nfiles}")
+    else:
+        layer_line = "- Слой: BSL LS пропущен — нет .bsl-источников во входах"
+    layer_line += ((" + слой 1 (`checkbsl_scan.py`, слито с дедупликацией)"
+                    if meta.get("merged_scan") else "")
+                   + (" + слой метаданных (`metadata_scan.py`, слито)"
+                      if meta.get("merged_metadata") else ""))
     lines: List[str] = [
         "# Отчёт код-ревью — BSL LS (`bsl_ls_analyze.py`)",
         "",
         f"- Дата: {datetime.now().strftime('%Y-%m-%d %H:%M')}",
-        f"- Слой: bsl-language-server (AST), файлов разобрано: {nfiles}"
-        + (" + слой 1 (`checkbsl_scan.py`, слито с дедупликацией)"
-           if meta.get("merged_scan") else ""),
+        layer_line,
     ]
-    if meta.get("coverage"):
+    if meta.get("coverage") and meta.get("bsl_ran", True):
         lines.append(f"- Покрытие: {meta['coverage']}")
     if meta.get("suppressed"):
         lines.append(f"- Подавлено: {len(meta['suppressed'])} находок (--suppress,"
@@ -861,8 +955,8 @@ def format_md(findings: List[scan.Finding], files: int) -> str:
             "Слой: bsl-language-server (детерминированный AST-анализ). "
             "Срабатывания — кандидаты в findings 05a, решение за Ревьюером.\n")
     if not findings:
-        return head + "\nЧисто: слой BSL LS нарушений не нашёл (правила, требующие " \
-               "контекста задачи, — за чек-листом и каталогом).\n"
+        return head + "\nЧисто: детерминированные слои нарушений не нашли (правила, " \
+               "требующие контекста задачи, — за чек-листом и каталогом).\n"
     rows = ["\n| # | Серьёзность | Ключ | № ст. | Файл:строка | Фрагмент |",
             "|---|---|---|---|---|---|"]
     for i, f in enumerate(findings, start=1):
@@ -915,8 +1009,9 @@ def main(argv: Optional[List[str]] = None) -> int:
                          "игнорируется, если задан --config или есть "
                          "<src-root>/.bsl-language-server.json")
     ap.add_argument("--cache-dir", metavar="DIR",
-                    help="кэш отчёта bsl-json.json по хэшу входов (дерево src_root, "
-                         "jar, конфиг): повторный прогон петли без правок — мгновенно")
+                    help="кэш отчёта bsl-json.json и индекса metadata-обхода по хэшу "
+                    "входов (дерево src_root, jar, конфиг): повторный прогон петли "
+                    "без правок — мгновенно")
     ap.add_argument("--save-report", metavar="FILE",
                     help="сохранить сырой отчёт bsl-json.json в файл (отладка)")
     ap.add_argument("--merge-scan", metavar="FILE",
@@ -925,6 +1020,12 @@ def main(argv: Optional[List[str]] = None) -> int:
                     "по умолчанию слой 1 запускается автоматически на тех же входах")
     ap.add_argument("--no-merge-scan", action="store_true",
                     help="не запускать слой 1 и не сливить его находки (только BSL LS)")
+    ap.add_argument("--merge-metadata", metavar="FILE",
+                    help="json-вывод metadata_scan.py (--format json): слить находки"
+                         " слоя метаданных в общий отчёт; по умолчанию слой"
+                         " запускается автоматически на тех же входах (.mdo/.rights)")
+    ap.add_argument("--no-merge-metadata", action="store_true",
+                    help="не запускать слой метаданных и не сливить его находки")
     ap.add_argument("--allow-number", action="append", default=[], metavar="N",
                     help="исключить число N из MagicNumber слоя 1 (повторяемый); "
                     "проектные исключения — .checkbsl_scan.json (allow-numbers)")
@@ -949,29 +1050,12 @@ def main(argv: Optional[List[str]] = None) -> int:
             print(format_coverage_report())
         return 0
 
-    java, jar = find_java(args.java), find_jar(args.jar)
-    if not (java and jar):
-        miss = []
-        if not java:
-            miss.append("java (brew install openjdk или --java/$BSL_LS_JAVA)")
-        if not jar:
-            miss.append("jar bsl-language-server (см. установку в докстринге)")
-        print("❌ Слой BSL LS недоступен, не найдено: " + "; ".join(miss) + "\n"
-              "   Работайте слоем 1: python3 scripts/checkbsl_scan.py <те же пути>",
-              file=sys.stderr)
-        return 3
-
     try:
+        # --- входы слоёв ---
         if args.diff:
-            files = scan.diff_files(args.diff)
-            if not files:
-                scan.safe_print(format_md([], 0) if args.format == "md"
-                                else format_json([], 0, []))
-                return 0
-            targets = {f.resolve() for f in files}
-            src_root = Path(args.src_root) if args.src_root else Path(
-                os.path.commonpath([str(f) for f in files]))
-            ranges = None if args.no_line_filter else added_line_ranges(args.diff, files)
+            files = scan.diff_files(args.diff)            # .bsl/.os из диффа
+            file_inputs: List[Path] = []
+            dir_inputs: List[Path] = []
         else:
             if not args.paths:
                 ap.error("укажите файл/каталог или --diff REF")
@@ -986,70 +1070,136 @@ def main(argv: Optional[List[str]] = None) -> int:
                     ok = False
             if not ok:
                 return 2
-            targets = {f.resolve() for f in file_inputs} or None
-            entries = [str(f) for f in file_inputs + dir_inputs]
-            src_root = Path(args.src_root) if args.src_root else Path(os.path.commonpath(entries))
-            ranges = None
+            files = file_inputs
 
-        config = Path(args.config) if args.config else None
-        if args.config:
-            coverage = f"полный (явный конфиг: {config})"
-        if not config:
-            auto = src_root / ".bsl-language-server.json"
-            config = auto if auto.is_file() else None
-            if config:
-                coverage = f"полный (конфиг проекта: {config})"
-        if not config and args.slim_config:
-            # свой конфиг не задан и не найден — генерируем узкий во временный файл
-            tmp_cfg = tempfile.NamedTemporaryFile(
-                mode="w", prefix="bsl_ls_slim_", suffix=".json",
-                delete=False, encoding="utf-8")
-            config = slim_config(Path(tmp_cfg.name))
-            tmp_cfg.close()
-            covered = set(load_catalog()) | set(ALIAS)
-            n_off = sum(1 for name in load_ls_table() if name not in covered)
-            coverage = (f"slim — отключено {n_off} диагностик вне "
-                        f"каталога∪ALIAS (--slim-config)")
-        if not config:
-            coverage = "полный (конфиг BSL LS по умолчанию)"
+        # нужны ли .bsl-цели для AST-слоя: дифф может быть metadata-ным,
+        # а входы путей — только .mdo/.rights (отклонение 2а сценария 02) —
+        # тогда Java не требуется, работает metadata-слой
+        def has_bsl(paths: List[Path]) -> bool:
+            for p in paths:
+                if p.is_file():
+                    if p.suffix.lower() in (".bsl", ".os"):
+                        return True
+                elif any(m.suffix.lower() in (".bsl", ".os")
+                         for m in p.rglob("*") if m.is_file()):
+                    return True
+            return False
 
-        cache_file = None
-        if args.cache_dir:
-            cache_dir = Path(args.cache_dir)
-            cache_dir.mkdir(parents=True, exist_ok=True)
-            cache_file = cache_dir / f"{cache_key(src_root.resolve(), jar, config)}.json"
+        bsl_needed = bool(files) if args.diff else has_bsl(file_inputs + dir_inputs)
 
-        if cache_file and cache_file.is_file():
-            report = json.loads(cache_file.read_text(encoding="utf-8"))
-            print(f"⚡ кэш отчёта: {cache_file.name} (входы не менялись, "
-                  f"java-прогон пропущен)", file=sys.stderr)
-        else:
-            report = run_bsl_ls(java, jar, src_root.resolve(), config, args.timeout)
-            if cache_file:
-                cache_file.write_text(json.dumps(report, ensure_ascii=False),
-                                      encoding="utf-8")
-        if args.save_report:
-            Path(args.save_report).write_text(
-                json.dumps(report, ensure_ascii=False, indent=1), encoding="utf-8")
-        findings, nfiles, extra = parse_report(report, targets, ranges)
+        findings: List[scan.Finding] = []
+        extra: List[dict] = []
+        nfiles = 0
+        ranges = None
+        coverage = "— (BSL LS не запускался: нет .bsl-источников)"
+
+        if bsl_needed:
+            java, jar = find_java(args.java), find_jar(args.jar)
+            if not (java and jar):
+                miss = []
+                if not java:
+                    miss.append("java (brew install openjdk или --java/$BSL_LS_JAVA)")
+                if not jar:
+                    miss.append("jar bsl-language-server (см. установку в докстринге)")
+                print("❌ Слой BSL LS недоступен, не найдено: " + "; ".join(miss) + "\n"
+                      "   Работайте слоями по отдельности: python3 scripts/checkbsl_scan.py"
+                      " <пути> и python3 scripts/metadata_scan.py <входы>",
+                      file=sys.stderr)
+                return 3
+
+            if args.diff:
+                targets = {f.resolve() for f in files}
+                src_root = Path(args.src_root) if args.src_root else Path(
+                    os.path.commonpath([str(f) for f in files]))
+                ranges = None if args.no_line_filter else added_line_ranges(args.diff, files)
+            else:
+                targets = {f.resolve() for f in file_inputs} or None
+                entries = [str(f) for f in file_inputs + dir_inputs]
+                src_root = Path(args.src_root) if args.src_root else Path(os.path.commonpath(entries))
+
+            config = Path(args.config) if args.config else None
+            if args.config:
+                coverage = f"полный (явный конфиг: {config})"
+            if not config:
+                auto = src_root / ".bsl-language-server.json"
+                config = auto if auto.is_file() else None
+                if config:
+                    coverage = f"полный (конфиг проекта: {config})"
+            if not config and args.slim_config:
+                # свой конфиг не задан и не найден — генерируем узкий во временный файл
+                tmp_cfg = tempfile.NamedTemporaryFile(
+                    mode="w", prefix="bsl_ls_slim_", suffix=".json",
+                    delete=False, encoding="utf-8")
+                config = slim_config(Path(tmp_cfg.name))
+                tmp_cfg.close()
+                covered = set(load_catalog()) | set(ALIAS)
+                n_off = sum(1 for name in load_ls_table() if name not in covered)
+                coverage = (f"slim — отключено {n_off} диагностик вне "
+                            f"каталога∪ALIAS (--slim-config)")
+            if not config:
+                coverage = "полный (конфиг BSL LS по умолчанию)"
+
+            cache_file = None
+            cache_dir = Path(args.cache_dir) if args.cache_dir else None
+            if cache_dir:
+                cache_dir.mkdir(parents=True, exist_ok=True)
+                cache_file = cache_dir / f"{cache_key(src_root.resolve(), jar, config)}.json"
+
+            if cache_file and cache_file.is_file():
+                report = json.loads(cache_file.read_text(encoding="utf-8"))
+                print(f"⚡ кэш отчёта: {cache_file.name} (входы не менялись, "
+                      f"java-прогон пропущен)", file=sys.stderr)
+            else:
+                report = run_bsl_ls(java, jar, src_root.resolve(), config, args.timeout)
+                if cache_file:
+                    cache_file.write_text(json.dumps(report, ensure_ascii=False),
+                                          encoding="utf-8")
+            if args.save_report:
+                Path(args.save_report).write_text(
+                    json.dumps(report, ensure_ascii=False, indent=1), encoding="utf-8")
+            findings, nfiles, extra = parse_report(report, targets, ranges)
+        elif args.diff and not files:
+            print("ℹ️ дифф без .bsl-источников — BSL LS пропущен, работают"
+                  " metadata-слой и чек-лист", file=sys.stderr)
+
+        # --- слой метаданных: автозапуск на тех же входах (META-002) ---
+        meta_f: List[scan.Finding] = []
+        meta_e: List[dict] = []
+        merged_metadata = False
+        meta_cache_dir = Path(args.cache_dir) if args.cache_dir else None
+        if args.merge_metadata:
+            meta_f, meta_e = load_metadata_findings(Path(args.merge_metadata))
+            merged_metadata = True
+        elif not args.no_merge_metadata:
+            meta_paths = [] if args.diff else file_inputs + dir_inputs
+            meta_f, meta_e, merged_metadata = run_metadata(
+                args.diff, meta_paths,
+                Path(args.src_root) if args.src_root else None, meta_cache_dir)
 
         # слой 1: дефолт — автозапуск на тех же входах и слияние с дедупом
         # (0.30.0); --merge-scan подаёт готовый json, --no-merge-scan выключает
         merged_scan = False
+        sf: List[scan.Finding] = []
+        se: List[dict] = []
+        # слой 1 — regex по .bsl/.os: файловые входы фильтруем по суффиксу
+        # (каталоги фильтрует сам сканер), .mdo/.rights — metadata-слоя
+        scan_targets = files if args.diff else (
+            [p for p in file_inputs if p.suffix.lower() in (".bsl", ".os")]
+            + dir_inputs)
         if args.merge_scan:
             sf, se = load_scan_findings(Path(args.merge_scan))
             merged_scan = True
-        elif not args.no_merge_scan:
-            scan_targets = files if args.diff else [Path(p) for p in args.paths]
+        elif not args.no_merge_scan and scan_targets:
             allow = scan.load_project_allow_numbers() + args.allow_number
             sf, se = run_layer1(scan_targets, allow)
             merged_scan = True
-        if merged_scan:
-            if ranges is not None:
-                sf = filter_diff_lines(sf, ranges)
-            findings, extra = merge_layer1(findings, extra, sf, se)
+        if merged_scan and ranges is not None:
+            sf = filter_diff_lines(sf, ranges)
 
-        # подавления «не баг» из 05a — после слияния, к обоим слоям сразу
+        # слияние трёх слоёв: приоритет metadata → слой 1 → BSL LS (03, META-002)
+        findings, extra = merge_layers((meta_f, meta_e), (sf, se), (findings, extra))
+
+        # подавления «не баг» из 05a — после слияния, ко всем слоям сразу
         suppressed_meta: List[dict] = []
         if args.suppress:
             entries: List[dict] = []
@@ -1068,7 +1218,9 @@ def main(argv: Optional[List[str]] = None) -> int:
         inputs = (f"--diff {args.diff}" if args.diff
                   else ", ".join(str(p) for p in args.paths))
         meta = {"inputs": inputs, "diff": args.diff, "round": 0,
-                "coverage": coverage, "merged_scan": merged_scan,
+                "coverage": coverage, "bsl_ran": bsl_needed,
+                "merged_scan": merged_scan,
+                "merged_metadata": merged_metadata,
                 "suppressed": suppressed_meta}
         report_path = Path(args.report)
         # номер раунда петли: bsl-ls-rN.md в каталоге отчёта

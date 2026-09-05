@@ -348,17 +348,22 @@ class TestDiffRanges(unittest.TestCase):
 
 
 class TestGracefulDegradation(unittest.TestCase):
-    """Нет java/jar → exit 3 с честным сообщением про слой 1 (сканер)."""
+    """Нет java/jar → exit 3 с честным сообщением про доступные слои."""
 
     def test_exit_3_when_tools_missing(self):
         import contextlib
         import io
-        err = io.StringIO()
-        with contextlib.redirect_stderr(err):
-            rc = wrapper.main(["--java", "/nonexistent-java", "--jar", "/nonexistent.jar",
-                               "whatever.bsl"])
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp:
+            module = Path(tmp) / "Module.bsl"
+            module.write_text("Процедура П()\nКонецПроцедуры\n", encoding="utf-8")
+            err = io.StringIO()
+            with contextlib.redirect_stderr(err):
+                rc = wrapper.main(["--java", "/nonexistent-java",
+                                   "--jar", "/nonexistent.jar", str(module)])
         self.assertEqual(rc, 3)
         self.assertIn("checkbsl_scan.py", err.getvalue())
+        self.assertIn("metadata_scan.py", err.getvalue())
         self.assertIn("jar", err.getvalue())
 
 
@@ -656,8 +661,13 @@ class TestCoverageReport(unittest.TestCase):
         self.assertGreaterEqual(s["layer1"], 18)
         self.assertGreaterEqual(s["layer2"], 100)
         self.assertGreater(s["combined"], s["layer2"])  # слой 1 добавляет своё
-        self.assertEqual(s["combined"], 135)            # замок: 137 было с 2 ключами вне каталога
-        self.assertEqual(s["pct"], "41,9")
+        self.assertGreater(s["combined"], s["layer2"] + s["meta_layer"] - 2)
+        # замок: 135 было до META-002 (слои 1∪2); +14 каталогных metadata-ключей
+        # (пересечение со слоем 2 — MetadataNameLongerThan, SameMetadataNames)
+        self.assertEqual(s["combined"], 149)
+        self.assertEqual(s["pct"], "46,3")
+        self.assertEqual(s["meta_layer"], 16)           # каталогные из CHECKS
+        self.assertEqual(s["sections"]["metadata"], 18)  # было 4 (слой 2)
         self.assertEqual(len(s["layer1_local"]), 2)     # правила стиля AGENTS.md
         self.assertEqual(s["local_cards"], len(wrapper.LOCAL_CATALOG))
 
@@ -669,7 +679,8 @@ class TestCoverageReport(unittest.TestCase):
         l1 = {r.key for r in wrapper.scan.RULES} & set(harvest)
         l2 = (set(wrapper.load_ls_table()) & set(harvest)) \
             | {v for v in wrapper.ALIAS.values() if v in harvest}
-        self.assertEqual(s["combined"], len(l1 | l2))
+        lm = {r.key for r in meta.CHECKS if r.kind == "catalog"} & set(harvest)
+        self.assertEqual(s["combined"], len(l1 | l2 | lm))
 
     def test_readme_and_docstring_in_sync(self):
         """README и докстринг держат число из счётчика — вручную не рассинхронить."""
@@ -736,6 +747,211 @@ class TestDriftLocalCardsLock(unittest.TestCase):
             self.assertTrue(any("UseLessForEach" in p for p in problems))
         finally:
             fixes["UseLessForEach"] = saved_fix
+
+
+def mdo_no_synonym(name: str = "торо_Тест") -> str:
+    """Минимальный .mdo без синонима ru → 🔴 MDOWithoutSynonym (№474)."""
+    return ("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"
+            "<mdclass:Catalog xmlns:mdclass="
+            "\"http://g5.1c.ru/v8/dt/metadata/mdclass\" "
+            "uuid=\"11111111-2222-3333-4444-555555555555\">\n"
+            f"  <name>{name}</name>\n"
+            "</mdclass:Catalog>\n")
+
+
+class TestMetadataMerge(unittest.TestCase):
+    """META-002: metadata-слой вливается в обёртку — автозапуск на тех же
+    входах, слияние с приоритетом, общий контур подавлений, CLI-флаги,
+    дифф без .bsl (отклонение 2а сценария 02)."""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.dir = Path(self._tmp.name)
+        self.src = self.dir / "src"
+        obj = self.src / "Catalogs" / "торо_Тест"
+        obj.mkdir(parents=True)
+        self.mdo = obj / "торо_Тест.mdo"
+        self.mdo.write_text(mdo_no_synonym(), encoding="utf-8")
+
+    def _cli(self, *extra: str) -> tuple:
+        """wrapper.main с подменой stdout/stderr → (rc, stdout, stderr)."""
+        import contextlib
+        import io
+        out, err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            rc = wrapper.main(list(extra))
+        return rc, out.getvalue(), err.getvalue()
+
+    def test_run_metadata_paths_mode(self):
+        mf, me, ran = wrapper.run_metadata(None, [self.src], self.src)
+        self.assertTrue(ran)
+        keys = {f.key for f in mf}
+        self.assertIn("MDOWithoutSynonym", keys)
+        f = next(x for x in mf if x.key == "MDOWithoutSynonym")
+        self.assertEqual(f.sev, "red")
+        self.assertEqual(f.std, "474")
+        self.assertEqual(f.section, "metadata")
+        e = me[mf.index(f)]
+        self.assertEqual(e["ls_code"], wrapper.META_LAYER_MARK)
+        self.assertEqual(e["docs"],
+                         "https://docs.checkbsl.org/checks/metadata/MDOWithoutSynonym/")
+
+    def test_run_metadata_no_sources_silent(self):
+        bsl = self.dir / "Module.bsl"
+        bsl.write_text("Процедура П()\nКонецПроцедуры\n", encoding="utf-8")
+        mf, me, ran = wrapper.run_metadata(None, [bsl], None)
+        self.assertFalse(ran)               # отклонение 1а: без шума
+        self.assertEqual((mf, me), ([], []))
+
+    def test_meta_findings_local_key_has_no_docs(self):
+        finding = meta.Finding("ObjectNotInConfiguration", "red", "t", "", "local",
+                               str(self.mdo), 3, "фрагмент", "деталь")
+        mf, me = wrapper.meta_findings_to_pool([finding])
+        self.assertEqual(mf[0].section, "local")
+        self.assertEqual(me[0]["docs"], "")
+        self.assertEqual(me[0]["message"], "деталь")
+
+    def test_merge_layers_priority_metadata_first(self):
+        line, key = 3, "MDOWithoutSynonym"
+
+        def mk(mark):
+            return ([wrapper.scan.Finding(key, "red", "t", "474",
+                                          str(self.mdo), line, "x",
+                                          "metadata")],
+                    [{"ls_code": mark, "docs": "", "message": "",
+                      "ls_severity": ""}])
+
+        meta_l, scan_l, bsl_l = (mk(wrapper.META_LAYER_MARK),
+                                 mk("слой 1 (checkbsl_scan)"),
+                                 mk("BSL LS diag"))
+        mf, me = wrapper.merge_layers(meta_l, scan_l, bsl_l)
+        self.assertEqual(len(mf), 1)        # коллизия погашена
+        self.assertEqual(me[0]["ls_code"], wrapper.META_LAYER_MARK)
+        # слой 1 побеждает BSL LS (семантика merge_layer1 сохранена)
+        mf, me = wrapper.merge_layers(scan_l, bsl_l)
+        self.assertEqual(me[0]["ls_code"], "слой 1 (checkbsl_scan)")
+
+    def test_cli_mdo_only_without_java(self):
+        """Дифф/входы только с .mdo — Java не нужна, metadata-находки в отчёте
+        (критерии 1 и 5 матрицы 04; --java/--jar фиктивны — проверка, что
+        ветка BSL LS не обращается к ним)."""
+        rc, out, _err = self._cli(str(self.mdo), "--src-root", str(self.src),
+                                  "--format", "json",
+                                  "--java", "/nonexistent-java",
+                                  "--jar", "/nonexistent.jar")
+        self.assertEqual(rc, 1)             # 🔴 MDOWithoutSynonym
+        data = json.loads(out)
+        self.assertEqual(data["counts"]["red"] >= 1, True)
+        marks = {f["ls_code"] for f in data["findings"]}
+        self.assertIn(wrapper.META_LAYER_MARK, marks)
+
+    def test_cli_no_merge_metadata(self):
+        rc, out, _err = self._cli(str(self.mdo), "--src-root", str(self.src),
+                                  "--format", "json", "--no-merge-metadata",
+                                  "--java", "/nonexistent-java",
+                                  "--jar", "/nonexistent.jar")
+        self.assertEqual(rc, 0)
+        self.assertEqual(json.loads(out)["counts"],
+                         {"red": 0, "yellow": 0, "green": 0})
+
+    def test_cli_merge_metadata_ready_json(self):
+        objects = meta.collect_mdo([self.src])
+        ctx = meta.Context(self.src, objects)
+        mf, sup = meta.scan(objects, ctx, [])
+        payload = json.loads(meta.format_json(mf, objects, sup, 5))
+        ready = self.dir / "metadata.json"
+        ready.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+        rc, out, _err = self._cli(str(self.src), "--merge-metadata", str(ready),
+                                  "--no-merge-scan", "--format", "json",
+                                  "--java", "/nonexistent-java",
+                                  "--jar", "/nonexistent.jar")
+        self.assertEqual(rc, 1)
+        data = json.loads(out)
+        self.assertIn("MDOWithoutSynonym", {f["key"] for f in data["findings"]})
+
+    def test_cli_suppress_covers_metadata(self):
+        suppress = self.dir / "suppress.json"
+        entries = [{"key": "MDOWithoutSynonym", "file": str(self.mdo),
+                    "reason": "не баг: служебный объект", "author": "Roman"}]
+        suppress.write_text(json.dumps({"suppress": entries}), encoding="utf-8")
+        rc, out, _err = self._cli(str(self.mdo), "--src-root", str(self.src),
+                                  "--suppress", str(suppress), "--format", "json",
+                                  "--java", "/nonexistent-java",
+                                  "--jar", "/nonexistent.jar")
+        data = json.loads(out)
+        self.assertEqual(data["suppressed"], 1)
+        self.assertNotIn("MDOWithoutSynonym",
+                         {f["key"] for f in data["findings"]})
+
+    def test_report_header_mentions_metadata_layer(self):
+        md = wrapper.build_report([], [], 0, {"inputs": "—", "merged_metadata": True,
+                                              "bsl_ran": False})
+        self.assertIn("слой метаданных (`metadata_scan.py`, слито)", md)
+        self.assertIn("BSL LS пропущен — нет .bsl-источников", md)
+        self.assertNotIn("Покрытие:", md)
+
+    def test_cli_diff_mdo_only_no_early_clean_exit(self):
+        """Отклонение 2а: дифф только с .mdo — прежний ранний выход «чисто»
+        устранён, metadata-находки в отчёте, BSL LS не запускается."""
+        import os
+        import subprocess
+        # «хорошее» состояние (с синонимом) — в коммите, нарушение — в рабочей копии
+        self.mdo.write_text(mdo_no_synonym().replace(
+            "</mdclass:Catalog>",
+            "<synonym><key>ru</key><value>Тест</value></synonym>\n"
+            "</mdclass:Catalog>"), encoding="utf-8")
+        try:
+            G = ["git", "-c", "user.email=t@t", "-c", "user.name=t"]
+            subprocess.run(G + ["init", "-q"], cwd=self.dir, check=True,
+                           capture_output=True)
+            subprocess.run(G + ["add", "."], cwd=self.dir, check=True,
+                           capture_output=True)
+            subprocess.run(G + ["commit", "-qm", "init"], cwd=self.dir,
+                           check=True, capture_output=True)
+        except (subprocess.CalledProcessError, OSError):
+            self.skipTest("git недоступен")
+        self.mdo.write_text(mdo_no_synonym(), encoding="utf-8")
+        old = os.getcwd()
+        os.chdir(self.dir)
+        try:
+            rc, out, err = self._cli("--diff", "HEAD", "--src-root",
+                                     str(self.src), "--format", "json",
+                                     "--java", "/nonexistent-java",
+                                     "--jar", "/nonexistent.jar")
+        finally:
+            os.chdir(old)
+        self.assertEqual(rc, 1)
+        data = json.loads(out)
+        self.assertIn("MDOWithoutSynonym",
+                      {f["key"] for f in data["findings"]})
+        self.assertIn("BSL LS пропущен", err)
+
+    def test_exit3_message_names_both_layers(self):
+        bsl = self.dir / "Module.bsl"
+        bsl.write_text("Процедура П()\nКонецПроцедуры\n", encoding="utf-8")
+        rc, _out, err = self._cli(str(bsl), "--java", "/nonexistent-java",
+                                  "--jar", "/nonexistent.jar")
+        self.assertEqual(rc, 3)
+        self.assertIn("checkbsl_scan.py", err)
+        self.assertIn("metadata_scan.py", err)
+
+    def test_broken_xml_finds_warn_not_crash(self):
+        """Отклонение 6а: битый XML — 🟢 LocalBrokenXml в общем отчёте,
+        остальные источники проверяются (паритет со standalone-CLI)."""
+        broken = self.src / "Catalogs" / "торо_Битый" / "торо_Битый.mdo"
+        broken.parent.mkdir(parents=True, exist_ok=True)
+        broken.write_text("<?xml version=\"1.0\"?>\n<mdclass:Catalog "
+                          "xmlns:mdclass=\"http://x\"><name>торо_Битый\n",
+                          encoding="utf-8")
+        rc, out, _err = self._cli(str(self.src), "--src-root", str(self.src),
+                                  "--format", "json",
+                                  "--java", "/nonexistent-java",
+                                  "--jar", "/nonexistent.jar")
+        data = json.loads(out)
+        self.assertEqual(rc, 1)             # 🔴 от годного объекта остаётся
+        marks = {(f["key"], f["severity"]) for f in data["findings"]}
+        self.assertIn(("LocalBrokenXml", "green"), marks)
 
 
 if __name__ == "__main__":

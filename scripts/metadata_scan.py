@@ -32,13 +32,23 @@ bash validate-new-object.sh без ключей каталога, № станд
 счётчиком — подавление не молчаливое.
 
 Потолок/счётчик: --coverage-report печатает каталогные metadata-ключи слоя
-(N/32, источник — skills/1c-code-review/references/checkbsl/metadata.md);
-вливание слоя в общий счётчик обёртки bsl_ls_analyze.py — задача META-002.
+(N/32, источник — skills/1c-code-review/references/checkbsl/metadata.md).
+С META-002 слой влит в обёртку bsl_ls_analyze.py: запускается автоматически
+на тех же входах и сливается в общий отчёт (--no-merge-metadata выключает);
+standalone-CLI остаётся для машин без Java и валидации нового объекта
+(validate-new-object.sh, Часть 1).
+
+Ускорение петли: --cache-dir — кэш индекса проектного обхода (UUID/Roles/
+Subsystems) по mtime-хэшу дерева; повторная итерация без правок не читает
+дерево заново, несовпадение хэша или битый файл кэша — обход как без кэша
+(кэш никогда не источник истины).
 """
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
+import os
 import re
 import subprocess
 import sys
@@ -297,11 +307,17 @@ class MdoObject:
 
 
 class Context:
-    """Ленивые кросс-файловые индексы по src_root (один проход — все объекты)."""
+    """Ленивые кросс-файловые индексы по src_root (один проход — все объекты).
 
-    def __init__(self, src_root: Optional[Path], objects: List[MdoObject]):
+    cache_dir (META-002): каталог кэша индекса обхода — повторная итерация
+    петли ревью не читает дерево заново (замер 05 META-001: полный обход
+    toir2 ≈9,7 с); ключ — mtime-хэш дерева, кэш не источник истины."""
+
+    def __init__(self, src_root: Optional[Path], objects: List[MdoObject],
+                 cache_dir: Optional[Path] = None):
         self.src_root = src_root
         self.objects = objects
+        self.cache_dir = cache_dir
         self._uuid_files: Optional[Dict[str, Set[Path]]] = None
         self._rights_tokens: Optional[Set[str]] = None
         self._subsystem_hits: Optional[Set[str]] = None
@@ -330,7 +346,9 @@ class Context:
     def _prime(self) -> None:
         """ОДИН проход по src: uuid→файлы + токены ролей + ссылки подсистем.
         Раздельные обходы стоили ~9,6 с на дереве toir2 (2627 модулей) —
-        каждый файл читался до трёх раз; один проход ≈4-5 с (НФТ 03: <5 с)."""
+        каждый файл читался до трёх раз; один проход ≈4-5 с (НФТ 03: <5 с).
+        С кэшем (META-002) проход не повторяется, пока mtime-хэш дерева
+        не изменился."""
         if self._uuid_files is not None:
             return
         self._uuid_files = {}
@@ -339,6 +357,11 @@ class Context:
         if not (self.src_root and self.src_root.is_dir()):
             self.note_skip("UUID-коллизии, роли, подсистемы (--src-root не передан)")
             return
+        cache_file = None
+        if self.cache_dir is not None:
+            cache_file = self.cache_dir / f"metadata-index-{self._tree_key()[:24]}.json"
+            if self._load_index(cache_file):
+                return
         rx_bytes = re.compile(UUID_RE.pattern.encode())
         have_roles = have_subs = False
         for p in sorted(self.src_root.rglob("*")):
@@ -361,6 +384,66 @@ class Context:
             self.note_skip("роли (Roles/ недоступен)")
         if not have_subs:
             self.note_skip("подсистемы (Subsystems/ недоступен)")
+        if cache_file is not None:
+            self._save_index(cache_file, have_roles, have_subs)
+
+    # формат индекса: правки сериализации — бампить версию
+    INDEX_CACHE_VERSION = 1
+
+    def _tree_key(self) -> str:
+        """Хэш входов индекса: дерево src (путь/размер/mtime читаемых
+        суффиксов). mtime+size, не содержимое: хэширование 500 МБ съело бы
+        выигрыш кэша; правка меняет mtime (паттерн cache_key обёртки)."""
+        h = hashlib.sha256()
+        h.update(f"v{self.INDEX_CACHE_VERSION}".encode())
+        h.update(str(self.src_root.resolve()).encode())
+        for dirpath, dirnames, filenames in os.walk(self.src_root):
+            dirnames[:] = sorted(d for d in dirnames if d != ".git")
+            for fn in sorted(filenames):
+                if not fn.endswith((".mdo", ".form", ".rights")):
+                    continue
+                p = Path(dirpath) / fn
+                try:
+                    s = p.stat()
+                except OSError:
+                    continue
+                h.update(f"{p.relative_to(self.src_root)}:{s.st_size}:"
+                         f"{s.st_mtime_ns}\n".encode())
+        return h.hexdigest()
+
+    def _load_index(self, path: Path) -> bool:
+        """Индекс из кэша; битый/чужой файл — False (обход заново)."""
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+            uuid_files = {u: set(map(Path, fs))
+                          for u, fs in data["uuid_files"].items()}
+            rights = set(data["rights_tokens"])
+            subs = set(data["subsystem_hits"])
+            have_roles, have_subs = bool(data["have_roles"]), bool(data["have_subs"])
+        except (OSError, ValueError, KeyError, TypeError):
+            return False
+        self._uuid_files = uuid_files
+        self._rights_tokens = rights
+        self._subsystem_hits = subs
+        if not have_roles:
+            self.note_skip("роли (Roles/ недоступен)")
+        if not have_subs:
+            self.note_skip("подсистемы (Subsystems/ недоступен)")
+        return True
+
+    def _save_index(self, path: Path, have_roles: bool, have_subs: bool) -> None:
+        """Индекс в кэш (best-effort: кэш — ускоритель, ошибка не фатальна)."""
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(json.dumps({
+                "uuid_files": {u: sorted(str(p) for p in fs)
+                               for u, fs in self._uuid_files.items()},
+                "rights_tokens": sorted(self._rights_tokens),
+                "subsystem_hits": sorted(self._subsystem_hits),
+                "have_roles": have_roles, "have_subs": have_subs,
+            }, ensure_ascii=False), encoding="utf-8")
+        except OSError:
+            pass
 
     @property
     def rights_tokens(self) -> Set[str]:
@@ -787,13 +870,21 @@ def collect_mdo(inputs: List[Path]) -> List[MdoObject]:
     return out
 
 
-def diff_paths(ref: str) -> List[Path]:
-    """Изменённые .mdo/.rights относительно git-ссылки → пути объектов."""
+def diff_paths(ref: str, cwd: Optional[Path] = None) -> List[Path]:
+    """Изменённые .mdo/.rights относительно git-ссылки → пути объектов.
+
+    Корень репо — от cwd (как checkbsl_scan.diff_files): обёртка может быть
+    запущена из любого каталога, якорь одинаков для всех слоёв."""
+    root = subprocess.run(["git", "rev-parse", "--show-toplevel"],
+                          capture_output=True, text=True, cwd=cwd)
+    if root.returncode != 0:
+        raise RuntimeError("не в git-репозитории — git rev-parse не выполнен")
+    repo = Path(root.stdout.strip())
     try:
-        # core.quotepath=off: git экранирует кириллицу октетами (Ñ…),
+        # core.quotepath=off: git экранирует кириллицу октетами (Ñ…),
         # такого пути не существует — дифф молча терял бы русскоязычные объекты
-        res = subprocess.run(["git", "-c", "core.quotepath=off", "diff",
-                              "--name-only", "--diff-filter=ACMR",
+        res = subprocess.run(["git", "-C", str(repo), "-c", "core.quotepath=off",
+                              "diff", "--name-only", "--diff-filter=ACMR",
                               ref, "--", "*.mdo", "*.rights"],
                              capture_output=True, text=True, check=True)
     except (subprocess.CalledProcessError, OSError) as e:
@@ -802,7 +893,7 @@ def diff_paths(ref: str) -> List[Path]:
     for line in res.stdout.splitlines():
         line = line.strip()
         if line and (line.endswith(".mdo") or line.endswith(".rights")):
-            p = Path(line)
+            p = repo / line
             if p.exists():
                 out.append(p)
     return out
@@ -973,7 +1064,11 @@ def main(argv: Optional[List[str]] = None) -> int:
     ap.add_argument("--format", choices=("md", "json"), default="md")
     ap.add_argument("--suppress", action="append", default=[], metavar="FILE",
                     help="suppress.json (scripts/review_suppress.py): находки с решением"
-                    " Ревьюера «не баг» исключаются, но видны счётчиком (повторяемый)")
+                         " Ревьюера «не баг» исключаются, но видны счётчиком (повторяемый)")
+    ap.add_argument("--cache-dir", metavar="DIR",
+                    help="кэш индекса проектного обхода (UUID/Roles/Subsystems) по"
+                         " mtime-хэшу дерева: повторная итерация петли не читает"
+                         " дерево заново; обёртка передаёт свой --cache-dir")
     ap.add_argument("--report", metavar="FILE",
                     help="записать md-отчёт в файл (петля самоочистки, r<N>.md)")
     ap.add_argument("--coverage-report", action="store_true",
@@ -1007,7 +1102,8 @@ def main(argv: Optional[List[str]] = None) -> int:
             return 0
         src_root = infer_src_root(objects,
                                   Path(args.src_root) if args.src_root else None)
-        ctx = Context(src_root, objects)
+        ctx = Context(src_root, objects,
+                      Path(args.cache_dir) if args.cache_dir else None)
         findings, suppressed = scan(objects, ctx, entries)
     except (FileNotFoundError, RuntimeError, json.JSONDecodeError) as e:
         print(f"❌ {e}", file=sys.stderr)
