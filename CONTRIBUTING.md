@@ -30,7 +30,8 @@
    ```
    Обе команды должны дать PASS/OK.
 6. Обновите таблицу скилов в [`README.md`](./README.md).
-7. Добавьте запись в [`docs/CHANGELOG.md`](./docs/CHANGELOG.md).
+7. Добавьте кейс в `tests/fixtures/skill_triggers.json`: 3–5 позитивных и 1–2 негативные фразы, сценарий, маршрутизатор и ожидаемые скилы. Проверка: `python3 -m unittest tests.test_skill_trigger_regression -v`; живой прогон — по [`docs/skill-trigger-regression.md`](./docs/skill-trigger-regression.md).
+8. Добавьте запись в [`docs/CHANGELOG.md`](./docs/CHANGELOG.md).
 
 ## Главные правила оформления
 
