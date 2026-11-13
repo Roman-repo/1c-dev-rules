@@ -99,11 +99,32 @@ class Tree:
         return self.write("Configuration/Configuration.mdo",
                           mdo("Configuration", "\n".join(inner), name))
 
-    def role(self, name_role="ТестРоль", tokens=("Catalog.ТестСправочник",)) -> Path:
-        names = "\n".join(f"<name>{t}</name>" for t in tokens)
+    def role(self, name_role="ТестРоль", tokens=("Catalog.ТестСправочник",),
+             right_value="true") -> Path:
+        objects = "\n".join(
+            f"<object><name>{t}</name><right><name>Read</name>"
+            f"<value>{right_value}</value></right></object>" for t in tokens)
         return self.write(f"Roles/{name_role}/Rights.rights",
                           f'<?xml version="1.0" encoding="UTF-8"?>\n'
-                          f'<Rights>\n<object>{names}</object>\n</Rights>\n')
+                          f'<Rights><setForNewObjects>false</setForNewObjects>'
+                          f'{objects}</Rights>\n')
+
+    def standard_role(self, name, config_rights=(), set_new=False,
+                      set_attributes=True, synonym=None) -> Path:
+        rights = "".join(
+            f"<right><name>{right}</name><value>{str(value).lower()}</value></right>"
+            for right, value in config_rights)
+        raw = ('<?xml version="1.0" encoding="UTF-8"?>\n'
+               f'<Rights><setForNewObjects>{str(set_new).lower()}</setForNewObjects>'
+               f'<setForAttributesByDefault>{str(set_attributes).lower()}'
+               '</setForAttributesByDefault><object><name>Configuration.Тест</name>'
+               f'{rights}</object></Rights>')
+        path = self.write(f"Roles/{name}/Rights.rights", raw)
+        if synonym is not None:
+            self.write(f"Roles/{name}/{name}.mdo",
+                       mdo("Role", f"<name>{name}</name>"
+                           + synonyms([("ru", synonym)]), name))
+        return path
 
     def subsystem(self, tokens=("Catalog.ТестСправочник",)) -> Path:
         body = "<name>ТестПодсистема</name>\n" + "\n".join(
@@ -362,6 +383,13 @@ class TestLocalStructural(unittest.TestCase):
         self.assertEqual([x for x in hit if "Безроли" in x.detail], hit)
         self.assertEqual(hit[0].std, "532")
 
+    def test_object_with_only_denied_rights_is_without_role(self):
+        """META-003: <value>false</value> — не включение объекта в роль."""
+        self.t.catalog()
+        self.t.role(right_value="false")
+        f, _ = self.t.scan(self.t.src / "Catalogs")
+        self.assertIn("ObjectWithoutRole", keys(f))
+
     def test_object_without_subsystem(self):
         self.t.catalog(name="Безподсистемы", syn="Без подсистемы")
         self.t.config(objects=("Catalog.ТестСправочник", "Catalog.Безподсистемы"))
@@ -514,6 +542,131 @@ class TestLocalStructural(unittest.TestCase):
                      "ПродолжитьВызов();\nКонецПроцедуры\n")
         f, _ = self.t.scan(self.t.src / "Catalogs")
         self.assertNotIn("ChangeAndCallNoResume", keys(f))
+
+
+class TestRoleRights(unittest.TestCase):
+    """META-003: .rights — самостоятельный вход и права стандартных ролей."""
+
+    def setUp(self):
+        self.t = Tree()
+
+    def _scan(self, *paths):
+        roles = meta.collect_rights(list(paths))
+        ctx = meta.Context(self.t.src, [])
+        return meta.scan([], ctx, [], roles)
+
+    def test_all_standard_roles_clean(self):
+        paths = [
+            self.t.standard_role("ПолныеПрава", set_new=True,
+                                 synonym="Полные права"),
+            self.t.standard_role(
+                "АдминистраторСистемы",
+                [(r, True) for r in meta.ADMIN_REQUIRED_RIGHTS],
+                synonym="Администратор системы"),
+            self.t.standard_role(
+                "ИнтерактивноеОткрытиеВнешнихОтчетовИОбработок",
+                [(r, True) for r in meta.OPEN_EXT_REQUIRED_RIGHTS],
+                synonym="Интерактивное открытие внешних отчетов и обработок"),
+        ]
+        f, _ = self._scan(*paths)
+        self.assertFalse(keys(f) & {
+            "FullRightsRoleWithoutNecessaryRights",
+            "AdminRightsWithoutNecessaryRights", "InteractiveOpenExtMissingRights",
+            "WrongStandardRoleSynonym", "RoleSetForNewObjects"})
+
+    def test_full_rights_flags_required(self):
+        p = self.t.standard_role("ПолныеПрава", set_new=False,
+                                 set_attributes=False)
+        f, _ = self._scan(p)
+        hit = [x for x in f if x.key == "FullRightsRoleWithoutNecessaryRights"]
+        self.assertEqual(len(hit), 2)
+        self.assertTrue(all(x.sev == "red" and x.std == "488" for x in hit))
+
+    def test_full_rights_must_not_administer(self):
+        p = self.t.standard_role("ПолныеПрава", [("Administration", True)],
+                                 set_new=True)
+        f, _ = self._scan(p)
+        hit = [x for x in f if x.key == "FullRightsRoleWithoutNecessaryRights"]
+        self.assertEqual(len(hit), 1)
+        self.assertIn("Administration", hit[0].detail)
+
+    def test_admin_requires_all_core_rights(self):
+        p = self.t.standard_role("АдминистраторСистемы", [("Administration", True)])
+        f, _ = self._scan(p)
+        hit = [x for x in f if x.key == "AdminRightsWithoutNecessaryRights"]
+        self.assertEqual(len(hit), len(meta.ADMIN_REQUIRED_RIGHTS) - 1)
+        self.assertTrue(any("UpdateDataBaseConfiguration" in x.detail for x in hit))
+
+    def test_open_ext_requires_reports_and_processors(self):
+        p = self.t.standard_role(
+            "ИнтерактивноеОткрытиеВнешнихОтчетовИОбработок",
+            [("InteractiveOpenExtReports", True)])
+        f, _ = self._scan(p)
+        hit = [x for x in f if x.key == "InteractiveOpenExtMissingRights"]
+        self.assertEqual(len(hit), 1)
+        self.assertIn("InteractiveOpenExtDataProcessors", hit[0].detail)
+
+    def test_wrong_standard_role_synonym(self):
+        p = self.t.standard_role("ПолныеПрава", set_new=True, synonym="Все права")
+        f, _ = self._scan(p)
+        hit = [x for x in f if x.key == "WrongStandardRoleSynonym"]
+        self.assertEqual(len(hit), 1)
+        self.assertTrue(hit[0].file.endswith("ПолныеПрава.mdo"))
+
+    def test_standard_role_synonym_from_mdo_only_diff(self):
+        rights = self.t.standard_role("ПолныеПрава", set_new=True, synonym="Все права")
+        objects = meta.collect_mdo([rights.parent])
+        ctx = meta.Context(self.t.src, objects)
+        f, _ = meta.scan(objects, ctx, [], [])
+        self.assertIn("WrongStandardRoleSynonym", keys(f))
+        self.assertNotIn("FullRightsRoleWithoutNecessaryRights", keys(f))
+
+    def test_nonstandard_role_must_not_grant_all_new_objects(self):
+        p = self.t.standard_role("ЧтениеДанных", set_new=True)
+        f, _ = self._scan(p)
+        self.assertIn("RoleSetForNewObjects", keys(f))
+
+    def test_broken_rights_warns_not_crashes(self):
+        p = self.t.write("Roles/Битая/Rights.rights", "<Rights>не закрыт")
+        f, _ = self._scan(p)
+        hit = [x for x in f if x.key == "LocalBrokenXml"]
+        self.assertEqual(len(hit), 1)
+        self.assertEqual(hit[0].sev, "green")
+
+    def test_direct_rights_cli_json_and_exit_red(self):
+        p = self.t.standard_role("АдминистраторСистемы")
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            rc = meta.main(["--format", "json", str(p)])
+        data = json.loads(out.getvalue())
+        self.assertEqual(rc, 1)
+        self.assertEqual(data["objects"], [])
+        self.assertEqual(data["rights"][0]["name"], "АдминистраторСистемы")
+        self.assertIn("AdminRightsWithoutNecessaryRights",
+                      {x["key"] for x in data["findings"]})
+
+    def test_duplicate_rights_inputs_dedup(self):
+        p = self.t.standard_role("АдминистраторСистемы")
+        self.assertEqual(len(meta.collect_rights([p, p, p.parent])), 1)
+
+    def test_rights_suppression_and_report(self):
+        p = self.t.standard_role("АдминистраторСистемы")
+        sup = self.t.root / "suppress.json"
+        sup.write_text(json.dumps([{
+            "key": "AdminRightsWithoutNecessaryRights", "file": str(p),
+            "reason": "усечённый учебный пример", "author": "Roman",
+            "date": "2026-11-13"}], ensure_ascii=False), encoding="utf-8")
+        report = self.t.root / "rights.md"
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            rc = meta.main(["--format", "json", "--suppress", str(sup),
+                            "--report", str(report), str(p)])
+        data = json.loads(out.getvalue())
+        self.assertEqual(rc, 0)
+        self.assertEqual(data["suppressed"], len(meta.ADMIN_REQUIRED_RIGHTS))
+        self.assertNotIn("AdminRightsWithoutNecessaryRights",
+                         {x["key"] for x in data["findings"]})
+        self.assertIn(".rights 1", report.read_text(encoding="utf-8"))
 
 
 class TestRobustness(unittest.TestCase):

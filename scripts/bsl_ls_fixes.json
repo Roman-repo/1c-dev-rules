@@ -687,5 +687,25 @@
   "StandardRolesNotInDefaults": {
     "why": "Обязательные роли должны быть основными (defaultRoles) — иначе новый пользователь без явного назначения не сможет работать (п. 2.6.5 1С:Совместимо).",
     "good": "<defaultRoles>Role.ПолныеПрава</defaultRoles>\n<defaultRoles>Role.АдминистраторСистемы</defaultRoles>\n<defaultRoles>Role.ИнтерактивноеОткрытиеВнешнихОтчетовИОбработок</defaultRoles>"
+  },
+  "FullRightsRoleWithoutNecessaryRights": {
+    "why": "ПолныеПрава должна автоматически охватывать новые прикладные объекты и поля, но не содержать административных права (№488).",
+    "good": "<setForNewObjects>true</setForNewObjects>\n<setForAttributesByDefault>true</setForAttributesByDefault>; Administration=false"
+  },
+  "AdminRightsWithoutNecessaryRights": {
+    "why": "Без обязательных прав корня Configuration роль АдминистраторСистемы не сможет администрировать и обновлять информационную базу.",
+    "good": "Configuration.<Имя>: Administration, DataAdministration, UpdateDataBaseConfiguration, ExclusiveMode, ConfigurationExtensionsAdministration = true"
+  },
+  "InteractiveOpenExtMissingRights": {
+    "why": "Обязательная роль открытия внешних файлов должна разрешать и внешние отчёты, и внешние обработки.",
+    "good": "Configuration.<Имя>: InteractiveOpenExtDataProcessors=true; InteractiveOpenExtReports=true"
+  },
+  "WrongStandardRoleSynonym": {
+    "why": "У обязательных ролей фиксированы русские синонимы: пользователи и документация должны видеть единые названия (п. 2.6.1 1С:Совместимо).",
+    "good": "ПолныеПрава → «Полные права»; АдминистраторСистемы → «Администратор системы»"
+  },
+  "RoleSetForNewObjects": {
+    "why": "setForNewObjects=true у прикладной роли молча открывает доступ ко всем будущим объектам, включая ещё не прошедшие ревью (№532).",
+    "good": "<setForNewObjects>false</setForNewObjects>; права на новый объект назначить явно нужным бизнес-ролям"
   }
 }

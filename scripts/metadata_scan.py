@@ -36,7 +36,10 @@ bash validate-new-object.sh без ключей каталога, № станд
 С META-002 слой влит в обёртку bsl_ls_analyze.py: запускается автоматически
 на тех же входах и сливается в общий отчёт (--no-merge-metadata выключает);
 standalone-CLI остаётся для машин без Java и валидации нового объекта
-(validate-new-object.sh, Часть 1).
+(validate-new-object.sh, Часть 1). С META-003 `.rights` — самостоятельный
+вход (включая дифф без .mdo): проверяются обязательные роли, их синонимы,
+административные права и автоматическое назначение прав новым объектам;
+для №532 учитываются только объекты с хотя бы одним <value>true</value>.
 
 Ускорение петли: --cache-dir — кэш индекса проектного обхода (UUID/Roles/
 Subsystems) по mtime-хэшу дерева; повторная итерация без правок не читает
@@ -115,7 +118,12 @@ CHECKS: List[MetaRule] = [
     MetaRule("InvalidConfigurationName", "yellow", "Имя конфигурации содержит «редакция»/«подредакция»", scope="config"),
     MetaRule("MissingStandardRole", "red", "Нет обязательной роли (ПолныеПрава/АдминистраторСистемы/ИнтерактивноеОткрытиеВнешнихОтчетовИОбработок)", scope="config"),
     MetaRule("StandardRolesNotInDefaults", "yellow", "Обязательная роль не в основных ролях конфигурации", scope="config"),
+    MetaRule("FullRightsRoleWithoutNecessaryRights", "red", "Роль ПолныеПрава не предоставляет права на прикладные данные или содержит административные права", scope="role", std="488"),
+    MetaRule("AdminRightsWithoutNecessaryRights", "red", "Роль АдминистраторСистемы не содержит необходимых прав администрирования", scope="role"),
+    MetaRule("InteractiveOpenExtMissingRights", "red", "Роль ИнтерактивноеОткрытиеВнешнихОтчетовИОбработок не содержит оба необходимых права", scope="role"),
+    MetaRule("WrongStandardRoleSynonym", "yellow", "Некорректный русский синоним обязательной роли", scope="role"),
     # — локальные структурные (перенос X/M-цепочек validate-new-object.sh) —
+    MetaRule("RoleSetForNewObjects", "yellow", "Неоправданное автоматическое предоставление всех прав на новые объекты", kind="local", std="532", scope="role"),
     MetaRule("DuplicateUUIDInMDO", "red", "Дубликаты UUID внутри .mdo (M1)", kind="local"),
     MetaRule("UUIDCollisionProject", "red", "UUID объекта найден более чем в одном файле проекта (правило 12 AGENTS.md)", kind="local", src=True),
     MetaRule("AccumRegisterNoResource", "red", "Регистр накопления без ресурсов (M12)", kind="local"),
@@ -147,6 +155,7 @@ DIR_TYPES = {
     "CommonModules": "CommonModule", "ScheduledJobs": "ScheduledJob",
     "HTTPServices": "HTTPService", "WebServices": "WebService",
     "EventSubscriptions": "EventSubscription", "Reports": "Report",
+    "Roles": "Role",
 }
 HAS_RIGHTS = {"Catalog", "Document", "DataProcessor", "InformationRegister",
               "AccumulationRegister", "Constant", "ChartOfCharacteristicTypes",
@@ -155,6 +164,17 @@ HAS_UI = {"Catalog", "Document", "DataProcessor",
           "ChartOfCharacteristicTypes", "Report"}
 STANDARD_ROLES = ("ПолныеПрава", "АдминистраторСистемы",
                   "ИнтерактивноеОткрытиеВнешнихОтчетовИОбработок")
+STANDARD_ROLE_SYNONYMS_RU = {
+    "ПолныеПрава": "Полные права",
+    "АдминистраторСистемы": "Администратор системы",
+    "ИнтерактивноеОткрытиеВнешнихОтчетовИОбработок":
+        "Интерактивное открытие внешних отчетов и обработок",
+}
+ADMIN_REQUIRED_RIGHTS = (
+    "Administration", "DataAdministration", "UpdateDataBaseConfiguration",
+    "ExclusiveMode", "ConfigurationExtensionsAdministration",
+)
+OPEN_EXT_REQUIRED_RIGHTS = ("InteractiveOpenExtDataProcessors", "InteractiveOpenExtReports")
 UUID_RE = re.compile(r"\b[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}"
                      r"-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\b")
 MDREF_RE = re.compile(r"\b(?:Catalog|Document|DataProcessor|InformationRegister"
@@ -306,6 +326,16 @@ class MdoObject:
         return f"{self.mtype}.{self.name}"
 
 
+@dataclass
+class RoleRights:
+    """Файл Roles/<Роль>/Rights.rights как самостоятельный источник META-003."""
+    path: Path
+    root: Optional[ET.Element]  # None = XML не разобран (битый → WARN)
+    raw: str
+    name: str
+    dir: Path
+
+
 class Context:
     """Ленивые кросс-файловые индексы по src_root (один проход — все объекты).
 
@@ -375,8 +405,24 @@ class Context:
                 self._uuid_files.setdefault(uu.decode().lower(), set()).add(p)
             rel = p.relative_to(self.src_root)
             if rel.parts and rel.parts[0] == "Roles":
+                if p.suffix != ".rights":
+                    continue
                 have_roles = True
-                self._rights_tokens |= set(MDREF_RE.findall(data.decode("utf-8", "ignore")))
+                try:
+                    rights_root = ET.fromstring(data)
+                except ET.ParseError:
+                    self.note_skip(f"роль с битым XML: {rel}")
+                    continue
+                # №532: упоминание объекта само по себе доступ не даёт.
+                # Учитываем только объект с хотя бы одним <value>true</value>.
+                for object_el in find_all(rights_root, "object"):
+                    name_el = kid(object_el, "name")
+                    if name_el is None or not (name_el.text or "").strip():
+                        continue
+                    if any((kid(r, "value") is not None
+                            and (kid(r, "value").text or "").strip().lower() == "true")
+                           for r in kids(object_el, "right")):
+                        self._rights_tokens.add((name_el.text or "").strip())
             elif rel.parts and rel.parts[0] == "Subsystems":
                 have_subs = True
                 self._subsystem_hits |= set(MDREF_RE.findall(data.decode("utf-8", "ignore")))
@@ -387,8 +433,8 @@ class Context:
         if cache_file is not None:
             self._save_index(cache_file, have_roles, have_subs)
 
-    # формат индекса: правки сериализации — бампить версию
-    INDEX_CACHE_VERSION = 1
+    # формат индекса: правки сериализации/семантики — бампить версию
+    INDEX_CACHE_VERSION = 2
 
     def _tree_key(self) -> str:
         """Хэш входов индекса: дерево src (путь/размер/mtime читаемых
@@ -447,8 +493,8 @@ class Context:
 
     @property
     def rights_tokens(self) -> Set[str]:
-        """Ссылки на объекты/поля из Rights.rights — текстовый поиск MDRef-
-        токенов (семантика grep X7 в bash: любой тег, не только <name>)."""
+        """Объекты/поля с хотя бы одним явно разрешённым правом в Rights.rights.
+        Записи только с <value>false</value> доступом не считаются (№532)."""
         self._prime()
         return self._rights_tokens
 
@@ -554,6 +600,16 @@ def check_object_catalog(obj: MdoObject, ctx: Context) -> List[Finding]:
                     "ExtensionMetadataWithoutPrefix", obj, f"<name>{name[:40]}",
                     f"объект расширения «{parts[i + 1]}» без префикса "
                     f"«{ext_prefix}» (требование 8.5 1С:Совместимо)"))
+
+    # META-003: синоним может измениться в диффе только <Роль>.mdo, без .rights.
+    expected_role_synonym = STANDARD_ROLE_SYNONYMS_RU.get(name) if obj.mtype == "Role" else None
+    if expected_role_synonym:
+        actual = syns.get("ru", "")
+        if actual != expected_role_synonym:
+            out.append(_rule_finding(
+                "WrongStandardRoleSynonym", obj, "<value>",
+                f"роль «{name}»: синоним ru «{actual or '—'}», "
+                f"ожидается «{expected_role_synonym}»"))
     return out
 
 
@@ -602,6 +658,98 @@ def check_config(obj: MdoObject, ctx: Context) -> List[Finding]:
         elif r not in defaults:
             out.append(_rule_finding("StandardRolesNotInDefaults", obj, "<defaultRoles>",
                                      f"роль «{r}» не в основных ролях конфигурации"))
+    return out
+
+
+# --- права (.rights, META-003) ----------------------------------------------------
+
+
+def role_flag(role: RoleRights, name: str) -> Optional[bool]:
+    el = kid(role.root, name) if role.root is not None else None
+    if el is None:
+        return None
+    value = (el.text or "").strip().lower()
+    return True if value == "true" else False if value == "false" else None
+
+
+def role_configuration_rights(role: RoleRights) -> Dict[str, bool]:
+    """Права корня Configuration.<Имя>: {имя права: разрешено}."""
+    out: Dict[str, bool] = {}
+    if role.root is None:
+        return out
+    for object_el in find_all(role.root, "object"):
+        name_el = kid(object_el, "name")
+        if name_el is None or not (name_el.text or "").strip().startswith("Configuration."):
+            continue
+        for right_el in kids(object_el, "right"):
+            name = kid(right_el, "name")
+            value = kid(right_el, "value")
+            if name is None or value is None:
+                continue
+            out[(name.text or "").strip()] = \
+                (value.text or "").strip().lower() == "true"
+    return out
+
+
+def check_role_rights(role: RoleRights) -> List[Finding]:
+    """Каталогные проверки обязательных ролей + защита от «всем всё новое»."""
+    if role.root is None:
+        return []
+    out: List[Finding] = []
+    config_rights = role_configuration_rights(role)
+
+    # 2.6.1 1С:Совместимо: синоним обязательной роли фиксирован. Если рядом
+    # нет .mdo (например, передан одиночный .rights), синоним не выдумываем.
+    expected_synonym = STANDARD_ROLE_SYNONYMS_RU.get(role.name)
+    role_mdo = role.dir / f"{role.name}.mdo"
+    if expected_synonym and role_mdo.is_file():
+        try:
+            role_root = ET.parse(str(role_mdo)).getroot()
+        except ET.ParseError:
+            role_root = None
+        if role_root is not None:
+            actual = synonym_values(role_root).get("ru", "")
+            if actual != expected_synonym:
+                out.append(_rule_finding(
+                    "WrongStandardRoleSynonym", role, "<value>",
+                    f"роль «{role.name}»: синоним ru «{actual or '—'}», "
+                    f"ожидается «{expected_synonym}»", path=role_mdo))
+
+    if role.name == "ПолныеПрава":
+        for flag, purpose in (
+                ("setForNewObjects", "права на новые прикладные объекты"),
+                ("setForAttributesByDefault", "права на новые поля")):
+            if role_flag(role, flag) is not True:
+                out.append(_rule_finding(
+                    "FullRightsRoleWithoutNecessaryRights", role, f"<{flag}>",
+                    f"ПолныеПрава: <{flag}> не равен true — не гарантированы {purpose}"))
+        # ПолныеПрава — неограниченный доступ к прикладным данным, но не к
+        # администрированию ИБ: такие права принадлежат АдминистраторСистемы.
+        for right in ADMIN_REQUIRED_RIGHTS:
+            if config_rights.get(right) is True:
+                out.append(_rule_finding(
+                    "FullRightsRoleWithoutNecessaryRights", role, f"<name>{right}</name>",
+                    f"ПолныеПрава содержит административное право {right}=true — "
+                    "его нужно оставить только роли АдминистраторСистемы"))
+    elif role_flag(role, "setForNewObjects") is True:
+        out.append(_rule_finding(
+            "RoleSetForNewObjects", role, "<setForNewObjects>",
+            f"роль «{role.name}» автоматически получает права на все новые объекты; "
+            "оставьте true только у ПолныеПрава либо подавите с документированным "
+            "обоснованием через suppress.json"))
+
+    required = ()
+    rule_key = ""
+    if role.name == "АдминистраторСистемы":
+        required, rule_key = ADMIN_REQUIRED_RIGHTS, "AdminRightsWithoutNecessaryRights"
+    elif role.name == "ИнтерактивноеОткрытиеВнешнихОтчетовИОбработок":
+        required, rule_key = OPEN_EXT_REQUIRED_RIGHTS, "InteractiveOpenExtMissingRights"
+    for right in required:
+        if config_rights.get(right) is not True:
+            out.append(_rule_finding(
+                rule_key, role, f"<name>{right}</name>",
+                f"роль «{role.name}»: право Configuration.{right} отсутствует "
+                "или равно false"))
     return out
 
 
@@ -852,8 +1000,7 @@ def load_object(mdo_path: Path) -> MdoObject:
 
 
 def collect_mdo(inputs: List[Path]) -> List[MdoObject]:
-    """Объекты метаданных из входов: .mdo-файлы + .mdo внутри каталогов-объектов.
-    .rights-входы не создают объектов (пока META-003), но не ошибочны."""
+    """Объекты метаданных из .mdo-файлов и всех вложенных каталогов."""
     mdo_files: List[Path] = []
     for p in inputs:
         if p.is_file() and p.suffix == ".mdo":
@@ -867,6 +1014,33 @@ def collect_mdo(inputs: List[Path]) -> List[MdoObject]:
             continue
         seen.add(f)
         out.append(load_object(f))
+    return out
+
+
+def load_rights(rights_path: Path) -> RoleRights:
+    raw = read_text(rights_path)
+    try:
+        root = ET.fromstring(raw)
+    except ET.ParseError:
+        root = None
+    return RoleRights(rights_path, root, raw, rights_path.parent.name,
+                      rights_path.parent)
+
+
+def collect_rights(inputs: List[Path]) -> List[RoleRights]:
+    """Файлы прав — самостоятельные входы, включая дифф только .rights."""
+    rights_files: List[Path] = []
+    for p in inputs:
+        if p.is_file() and p.suffix == ".rights":
+            rights_files.append(p)
+        elif p.is_dir():
+            rights_files.extend(sorted(p.rglob("*.rights")))
+    seen: Set[Path] = set()
+    out: List[RoleRights] = []
+    for f in rights_files:
+        if f not in seen:
+            seen.add(f)
+            out.append(load_rights(f))
     return out
 
 
@@ -899,7 +1073,8 @@ def diff_paths(ref: str, cwd: Optional[Path] = None) -> List[Path]:
     return out
 
 
-def infer_src_root(objects: List[MdoObject], explicit: Optional[Path]) -> Optional[Path]:
+def infer_src_root(objects: List[MdoObject], explicit: Optional[Path],
+                   roles: Optional[List[RoleRights]] = None) -> Optional[Path]:
     if explicit:
         return explicit
     for o in objects:
@@ -907,14 +1082,18 @@ def infer_src_root(objects: List[MdoObject], explicit: Optional[Path]) -> Option
             return o.dir.parent  # <src>/Configuration/
         if o.dir.parent.name in DIR_TYPES:  # <src>/<TypeDir>/<Имя>/
             return o.dir.parent.parent
+    for role in roles or []:
+        if role.dir.parent.name == "Roles":  # <src>/Roles/<Роль>/Rights.rights
+            return role.dir.parent.parent
     return None
 
 
 # --- сканирование ----------------------------------------------------------------
 
 
-def scan(objects: List[MdoObject], ctx: Context,
-         entries: List[dict]) -> Tuple[List[Finding], List[Finding]]:
+def scan(objects: List[MdoObject], ctx: Context, entries: List[dict],
+         roles: Optional[List[RoleRights]] = None
+         ) -> Tuple[List[Finding], List[Finding]]:
     findings: List[Finding] = []
     for obj in objects:
         if obj.root is None:
@@ -934,6 +1113,14 @@ def scan(objects: List[MdoObject], ctx: Context,
                 + ", ".join(["роли", "подсистемы", "Configuration.mdo",
                              "обработчики РЗ/подписок", "шаблоны СКД"]),
                 "", "local", str(obj.path), 1, obj.path.name))
+    for role in roles or []:
+        if role.root is None:
+            findings.append(Finding(
+                "LocalBrokenXml", "green",
+                "XML роли не разобран — проверки прав пропущены, сверьте вручную",
+                "", "local", str(role.path), 1, role.path.name))
+        else:
+            findings.extend(check_role_rights(role))
     if ctx.skipped:
         findings.append(Finding(
             "LocalContextSkipped", "green",
@@ -973,12 +1160,14 @@ def load_fixes() -> Dict[str, dict]:
 
 
 def format_md(findings: List[Finding], objects: List[MdoObject],
-              suppressed: List[Finding], rules_applied: int) -> str:
+              suppressed: List[Finding], rules_applied: int,
+              roles: Optional[List[RoleRights]] = None) -> str:
     counts = {s: sum(1 for f in findings if f.sev == s)
               for s in ("red", "yellow", "green")}
     n_mdo = sum(1 for o in objects if not o.is_config)
     n_cfg = sum(1 for o in objects if o.is_config)
-    src = (f".mdo {n_mdo}" + (f", Configuration.mdo {n_cfg}" if n_cfg else ""))
+    src = (f".mdo {n_mdo}" + (f", Configuration.mdo {n_cfg}" if n_cfg else "")
+           + (f", .rights {len(roles)}" if roles else ""))
     head = (f"# metadata_scan — {len(findings)} замечаний "
             f"(🔴 {counts['red']}, 🟡 {counts['yellow']}, 🟢 {counts['green']}); "
             f"источников: {src}; применимо правил: {rules_applied}"
@@ -1015,12 +1204,14 @@ def format_md(findings: List[Finding], objects: List[MdoObject],
 
 
 def format_json(findings: List[Finding], objects: List[MdoObject],
-                suppressed: List[Finding], rules_applied: int) -> str:
+                suppressed: List[Finding], rules_applied: int,
+                roles: Optional[List[RoleRights]] = None) -> str:
     counts = {s: sum(1 for f in findings if f.sev == s)
               for s in ("red", "yellow", "green")}
     return json.dumps(
         {"objects": [{"file": str(o.path), "type": o.mtype, "name": o.name}
                      for o in objects],
+         "rights": [{"file": str(r.path), "name": r.name} for r in roles or []],
          "rules_applied": rules_applied,
          "counts": counts, "suppressed": len(suppressed),
          "findings": [f.as_dict() for f in findings]},
@@ -1096,15 +1287,16 @@ def main(argv: Optional[List[str]] = None) -> int:
         for s in args.suppress:
             entries.extend(load_suppress(Path(s)))
         objects = collect_mdo(inputs)
-        if not objects:
-            print("metadata-источников (.mdo) во входах нет — .rights без объектов "
-                  "проверяются слоем META-003")
+        roles = collect_rights(inputs)
+        if not objects and not roles:
+            print("metadata-источников (.mdo/.rights) во входах нет — проверять нечего")
             return 0
         src_root = infer_src_root(objects,
-                                  Path(args.src_root) if args.src_root else None)
+                                  Path(args.src_root) if args.src_root else None,
+                                  roles)
         ctx = Context(src_root, objects,
                       Path(args.cache_dir) if args.cache_dir else None)
-        findings, suppressed = scan(objects, ctx, entries)
+        findings, suppressed = scan(objects, ctx, entries, roles)
     except (FileNotFoundError, RuntimeError, json.JSONDecodeError) as e:
         print(f"❌ {e}", file=sys.stderr)
         return 2
@@ -1112,12 +1304,14 @@ def main(argv: Optional[List[str]] = None) -> int:
     rules_applied = sum(
         1 for r in CHECKS
         if (r.scope == "config" and any(o.is_config for o in objects))
-        or (r.scope == "object" and any(not o.is_config for o in objects)))
-    md = format_md(findings, objects, suppressed, rules_applied)
+        or (r.scope == "object" and any(not o.is_config for o in objects))
+        or (r.scope == "role" and (bool(roles)
+            or any(o.mtype == "Role" for o in objects))))
+    md = format_md(findings, objects, suppressed, rules_applied, roles)
     if args.format == "md":
         print(md)
     else:
-        print(format_json(findings, objects, suppressed, rules_applied))
+        print(format_json(findings, objects, suppressed, rules_applied, roles))
     if args.report:
         Path(args.report).parent.mkdir(parents=True, exist_ok=True)
         Path(args.report).write_text(md, encoding="utf-8")
