@@ -24,7 +24,7 @@ regex-сканером checkbsl_scan.py и ручным проходом Рев�
 показывается со ссылкой на документацию BSL LS.
 
 Установка (один раз):
-    brew install openjdk                    # macOS; нужна Java 11+
+    brew install openjdk                    # macOS; нужна Java 21+
     # имя ассета версионировано (…-1.0.7-exec.jar): скачивайте exec.jar
     # со страницы последнего релиза и положите в ~/.local/share/1c-dev-rules/:
     # https://github.com/1c-syntax/bsl-language-server/releases/latest
