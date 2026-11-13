@@ -16,6 +16,7 @@ Fixture-скилы лежат в tests/fixtures/ — это ИСКУССТВЕН
 from __future__ import annotations
 
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -144,6 +145,86 @@ class TestRealSkills(unittest.TestCase):
         self.assertEqual(
             total_err, 0,
             f"валидатор нашёл {total_err} ошибок в skills/:\n" + "\n".join(failures),
+        )
+
+
+class TestRepositoryDocumentation(unittest.TestCase):
+    """Замки против рассинхрона документации с фактическим кодом."""
+
+    def test_reference_count_must_match_actual_files(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            refs = root / "skills" / "1c-example" / "references"
+            refs.mkdir(parents=True)
+            (refs / "one.md").write_text("one", encoding="utf-8")
+            (refs / "two.md").write_text("two", encoding="utf-8")
+            (root / "README.md").write_text(
+                "**1 скилов** + 1 карточки-ссылки\n"
+                "**Текущий: ✅ v1.0.0** — 1 скилов + 1 references\n",
+                encoding="utf-8",
+            )
+
+            errors = validate_skills.check_reference_count(root)
+            self.assertEqual(len(errors), 2, errors)
+            self.assertTrue(all("фактически 2" in error for error in errors), errors)
+
+    def write_java_fixture(self, root: Path, readme_java: str) -> None:
+        workflow = root / ".github" / "workflows" / "bsl-ls-live.yml"
+        workflow.parent.mkdir(parents=True)
+        workflow.write_text('java-version: "21"\n', encoding="utf-8")
+        (root / "README.md").write_text(readme_java, encoding="utf-8")
+        skill = root / "skills" / "1c-code-review" / "SKILL.md"
+        skill.parent.mkdir(parents=True)
+        skill.write_text("Требуется Java 21+.\n", encoding="utf-8")
+        script = root / "scripts" / "bsl_ls_analyze.py"
+        script.parent.mkdir(parents=True)
+        script.write_text("# Требуется Java 21+\n", encoding="utf-8")
+
+    def test_java_11_is_rejected_when_ci_uses_21(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self.write_java_fixture(root, "Требуется Java 11+.\n")
+            errors = validate_skills.check_java_requirements(root)
+            self.assertTrue(
+                any("Java 11+" in error and "CI Java 21+" in error for error in errors),
+                errors,
+            )
+
+    def test_review_intro_must_describe_three_layers(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            skill = root / "skills" / "1c-code-review" / "SKILL.md"
+            skill.parent.mkdir(parents=True)
+            skill.write_text(
+                "Проверка — два детерминированных слоя: checkbsl_scan.py, "
+                "bsl_ls_analyze.py и metadata_scan.py.\n"
+                "## Место в конвейере\n",
+                encoding="utf-8",
+            )
+            errors = validate_skills.check_review_intro(root)
+            self.assertTrue(any("три детерминированных слоя" in error for error in errors), errors)
+
+    def test_review_intro_must_mention_every_script(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            skill = root / "skills" / "1c-code-review" / "SKILL.md"
+            skill.parent.mkdir(parents=True)
+            skill.write_text(
+                "Проверка — три\nдетерминированных слоя: "
+                "checkbsl_scan.py и bsl_ls_analyze.py.\n"
+                "## Место в конвейере\n",
+                encoding="utf-8",
+            )
+            errors = validate_skills.check_review_intro(root)
+            self.assertEqual(len(errors), 1, errors)
+            self.assertIn("metadata_scan.py", errors[0])
+
+    def test_real_repository_documentation_passes(self):
+        report = validate_skills.validate_repository(REPO_ROOT)
+        self.assertEqual(
+            [finding.message for finding in report.errors],
+            [],
+            "реальная документация не прошла замки документного дрейфа",
         )
 
 

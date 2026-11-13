@@ -12,7 +12,9 @@ validate_skills.py — автопроверка структуры скилов 
   - тело SKILL.md <=500 строк;
   - нет упоминаний проектной специфики (торо_, гкс_, Project/Toir);
   - ссылки на references/*.md из тела ведут на существующие файлы
-    (нет «битых» и нет «мёртвых» reference-файлов).
+    (нет «битых» и нет «мёртвых» reference-файлов);
+  - документация репозитория синхронна с кодом: число references, версия Java
+    и вводное описание трёх слоёв код-ревью.
 
 Использование:
     python3 scripts/validate_skills.py [PATH_TO_PLUGIN_ROOT]
@@ -267,6 +269,116 @@ def validate_skill(
     return rep
 
 
+# --- замки документного дрейфа ---------------------------------------------
+
+def check_reference_count(root: Path) -> List[str]:
+    """Число references в README должно совпадать с фактическим составом."""
+    readme_path = root / "README.md"
+    if not readme_path.is_file():
+        return [f"README.md не найден: {readme_path}"]
+
+    actual = len(list((root / "skills").glob("*/references/*.md")))
+    text = readme_path.read_text(encoding="utf-8")
+    markers = (
+        ("сводка «Что внутри»", re.compile(r"\*\*\d+ скилов\*\* \+ (\d+) карточки-ссылки")),
+        ("строка статуса", re.compile(r"скилов \+ (\d+) references\b")),
+    )
+    errors: List[str] = []
+    for label, pattern in markers:
+        found = pattern.findall(text)
+        if not found:
+            errors.append(f"README {label}: маркер числа references не найден")
+            continue
+        for value in found:
+            if int(value) != actual:
+                errors.append(
+                    f"README {label}: указано {value} references, фактически {actual}"
+                )
+    return errors
+
+
+def check_java_requirements(root: Path) -> List[str]:
+    """Требование Java в документации должно совпадать с живым CI."""
+    workflow_path = root / ".github" / "workflows" / "bsl-ls-live.yml"
+    if not workflow_path.is_file():
+        return [f"CI-источник версии Java не найден: {workflow_path}"]
+
+    workflow = workflow_path.read_text(encoding="utf-8")
+    versions = re.findall(r"^\s*java-version:\s*[\"']?(\d+)[\"']?\s*$", workflow, flags=re.M)
+    if len(versions) != 1:
+        return [
+            f"{workflow_path.relative_to(root)}: ожидалась одна java-version, найдено {len(versions)}"
+        ]
+    expected = versions[0]
+
+    targets = (
+        root / "README.md",
+        root / "skills" / "1c-code-review" / "SKILL.md",
+        root / "scripts" / "bsl_ls_analyze.py",
+    )
+    errors: List[str] = []
+    for path in targets:
+        relative = path.relative_to(root)
+        if not path.is_file():
+            errors.append(f"не найден файл с требованием Java: {relative}")
+            continue
+        text = path.read_text(encoding="utf-8")
+        found = re.findall(r"\bJava\s+(\d+)\+", text)
+        if f"Java {expected}+" not in text:
+            errors.append(f"{relative}: нет актуального требования Java {expected}+ из CI")
+        for version in found:
+            if version != expected:
+                errors.append(
+                    f"{relative}: устаревшее требование Java {version}+, в CI Java {expected}+"
+                )
+    return errors
+
+
+def check_review_intro(root: Path) -> List[str]:
+    """Вводная часть code-review обязана описывать все три автоматических слоя."""
+    path = root / "skills" / "1c-code-review" / "SKILL.md"
+    if not path.is_file():
+        return [f"не найден скил код-ревью: {path}"]
+
+    text = path.read_text(encoding="utf-8")
+    intro, separator, _ = text.partition("## Место в конвейере")
+    if not separator:
+        return ["skills/1c-code-review/SKILL.md: не найдено начало раздела «Место в конвейере»"]
+    # Вводная оформлена blockquote: маркеры '>' не должны разрывать фразы.
+    intro = re.sub(r"^\s*>\s?", "", intro, flags=re.M)
+    normalized = " ".join(intro.split())
+
+    errors: List[str] = []
+    if "три детерминированных слоя" not in normalized.lower():
+        errors.append(
+            "skills/1c-code-review/SKILL.md: вводная часть не называет три детерминированных слоя"
+        )
+    for script in ("checkbsl_scan.py", "bsl_ls_analyze.py", "metadata_scan.py"):
+        if script not in normalized:
+            errors.append(
+                f"skills/1c-code-review/SKILL.md: вводная часть не упоминает {script}"
+            )
+    return errors
+
+
+def validate_repository(root: Path) -> SkillReport:
+    """Собирает repo-level замки в общий отчет валидатора."""
+    rep = SkillReport(name="документация репозитория")
+    checks = (
+        ("число references синхронно", check_reference_count),
+        ("требование Java синхронно с CI", check_java_requirements),
+        ("вводная code-review описывает три слоя", check_review_intro),
+    )
+    for success_message, check in checks:
+        errors = check(root)
+        if errors:
+            for error in errors:
+                rep.err(error)
+        else:
+            rep.ok(success_message)
+    return rep
+
+
 # --- вывод ----------------------------------------------------------------
 
 def fmt(report: SkillReport) -> List[str]:
@@ -319,6 +431,12 @@ def main(argv: List[str]) -> int:
             print(line)
         total_err += len(rep.errors)
         total_warn += len(rep.warnings)
+
+    repo_rep = validate_repository(root)
+    for line in fmt(repo_rep):
+        print(line)
+    total_err += len(repo_rep.errors)
+    total_warn += len(repo_rep.warnings)
 
     print("\n" + "=" * 60)
     status = "PASS" if total_err == 0 else "FAIL"
