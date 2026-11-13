@@ -342,6 +342,28 @@ class TestLocalStructural(unittest.TestCase):
         f, _ = self.t.scan(self.t.src / "Catalogs")
         self.assertIn("UUIDCollisionProject", keys(f))
 
+    def test_uuid_reference_in_form_is_not_collision(self):
+        shared = u()
+        body = "<name>ТестСправочник</name>" + synonyms([("ru", "Тест справочник")])
+        self.t.write("Catalogs/ТестСправочник/ТестСправочник.mdo",
+                     f'<mdclass:Catalog uuid="{shared}">{body}</mdclass:Catalog>')
+        self.t.write("Catalogs/ТестСправочник/Forms/Форма/Form.form",
+                     f'<value>&lt;colorstyle 0:{shared}></value>')
+        f, _ = self.t.scan(self.t.src / "Catalogs")
+        self.assertNotIn("UUIDCollisionProject", keys(f))
+
+    def test_uuid_reference_in_extension_is_not_collision(self):
+        shared = u()
+        body = "<name>ТестСправочник</name>" + synonyms([("ru", "Тест справочник")])
+        self.t.write("Catalogs/ТестСправочник/ТестСправочник.mdo",
+                     f'<mdclass:Catalog uuid="{shared}">{body}</mdclass:Catalog>')
+        self.t.write("Extensions/Тест/Documents/Тест/Тест.mdo",
+                     f'<mdclass:Document uuid="{u()}">'
+                     f'<extendedConfigurationObject>{shared}'
+                     '</extendedConfigurationObject></mdclass:Document>')
+        f, _ = self.t.scan(self.t.src / "Catalogs")
+        self.assertNotIn("UUIDCollisionProject", keys(f))
+
     def test_accumulation_register_gates(self):
         body = ("<name>ТестРегистр</name>" + synonyms([("ru", "Тест регистр")]))
         p = self.t.write("AccumulationRegisters/ТестРегистр/ТестРегистр.mdo",
@@ -512,6 +534,111 @@ class TestLocalStructural(unittest.TestCase):
         self.t.write("Catalogs/ТестСправочник/ObjectModule.bsl",
                      'Запрос = Новый Запрос("ВЫБРАТЬ * ИЗ Справочник.Х ГДЕ К = &Ключ");\n'
                      'Запрос.УстановитьПараметр("Ключ", Значение);\n')
+        f, _ = self.t.scan(self.t.src / "Catalogs")
+        self.assertNotIn("QueryParamMismatch", keys(f))
+
+    def test_query_params_are_scoped_to_variable_and_procedure(self):
+        self.t.catalog()
+        self.t.write(
+            "Catalogs/ТестСправочник/ObjectModule.bsl",
+            'Процедура Первая()\n'
+            ' Запрос = Новый Запрос("ВЫБРАТЬ * ИЗ Справочник.Х ГДЕ К = &Первый");\n'
+            ' Запрос.УстановитьПараметр("Первый", 1);\n'
+            ' Другой = Новый Запрос("ВЫБРАТЬ * ИЗ Справочник.Х ГДЕ К = &Второй");\n'
+            ' Другой.УстановитьПараметр("Второй", 2);\n'
+            'КонецПроцедуры\n'
+            'Процедура Вторая()\n'
+            ' Запрос = Новый Запрос("ВЫБРАТЬ * ИЗ Справочник.Х ГДЕ К = &Третий");\n'
+            ' Запрос.УстановитьПараметр("Третий", 3);\n'
+            'КонецПроцедуры\n')
+        f, _ = self.t.scan(self.t.src / "Catalogs")
+        self.assertNotIn("QueryParamMismatch", keys(f))
+
+    def test_query_param_dynamic_text_and_html_are_ignored(self):
+        self.t.catalog()
+        self.t.write(
+            "Catalogs/ТестСправочник/ObjectModule.bsl",
+            'Процедура Тест()\n'
+            ' Подпись = "&lt;текст&gt;&nbsp;";\n'
+            ' Запрос = Новый Запрос(ТекстЗапроса);\n'
+            ' Запрос.УстановитьПараметр("Параметр", 1);\n'
+            'КонецПроцедуры\n')
+        f, _ = self.t.scan(self.t.src / "Catalogs")
+        self.assertNotIn("QueryParamMismatch", keys(f))
+
+    def test_query_param_in_text_assignment(self):
+        self.t.catalog()
+        self.t.write(
+            "Catalogs/ТестСправочник/ObjectModule.bsl",
+            'Процедура Тест()\n'
+            ' Запрос = Новый Запрос;\n'
+            ' Запрос.Текст = "ВЫБРАТЬ * ИЗ Справочник.Х ГДЕ К = &Ключ";\n'
+            'КонецПроцедуры\n')
+        f, _ = self.t.scan(self.t.src / "Catalogs")
+        self.assertIn("QueryParamMismatch", keys(f))
+
+    def test_query_param_insert_and_text_substitution_clean(self):
+        self.t.catalog()
+        self.t.write(
+            "Catalogs/ТестСправочник/ObjectModule.bsl",
+            'Процедура Тест()\n'
+            ' Запрос = Новый Запрос("ВЫБРАТЬ * ИЗ Справочник.Х ГДЕ К = &Ключ");\n'
+            ' Запрос.Параметры.Вставить("Ключ", Значение);\n'
+            ' Другой = Новый Запрос("ВЫБРАТЬ * ИЗ &ИмяТаблицы");\n'
+            ' Другой.Текст = СтрЗаменить(ШаблонЗапроса, "&ИмяТаблицы", "Справочник.Х");\n'
+            ' Третий = Новый Запрос("ВЫБРАТЬ * ИЗ Справочник.Х ГДЕ К = &Отбор");\n'
+            ' Список.ТекстЗапроса = Третий.Текст;\n'
+            ' Список.Параметры.УстановитьЗначениеПараметра("Отбор", Значение);\n'
+            'КонецПроцедуры\n')
+        f, _ = self.t.scan(self.t.src / "Catalogs")
+        self.assertNotIn("QueryParamMismatch", keys(f))
+
+    def test_query_param_embedded_substitution_and_digits_clean(self):
+        self.t.catalog()
+        self.t.write(
+            "Catalogs/ТестСправочник/ObjectModule.bsl",
+            'Процедура Тест()\n'
+            ' Запрос = Новый Запрос("ВЫБРАТЬ * ИЗ Справочник.Х ГДЕ &Условие1");\n'
+            ' Запрос.Текст = СтрЗаменить(Запрос.Текст, "ГДЕ &Условие1", "");\n'
+            'КонецПроцедуры\n')
+        f, _ = self.t.scan(self.t.src / "Catalogs")
+        self.assertNotIn("QueryParamMismatch", keys(f))
+
+    def test_query_param_names_are_case_insensitive(self):
+        self.t.catalog()
+        self.t.write(
+            "Catalogs/ТестСправочник/ObjectModule.bsl",
+            'Процедура Тест()\n'
+            ' Запрос = Новый Запрос("ВЫБРАТЬ * ИЗ Справочник.Х ГДЕ К = &КлючЗапроса");\n'
+            ' Запрос.УстановитьПараметр("ключзапроса", Значение);\n'
+            'КонецПроцедуры\n')
+        f, _ = self.t.scan(self.t.src / "Catalogs")
+        self.assertNotIn("QueryParamMismatch", keys(f))
+
+    def test_query_param_external_helper_is_conservative(self):
+        self.t.catalog()
+        self.t.write(
+            "Catalogs/ТестСправочник/ObjectModule.bsl",
+            'Процедура Тест()\n'
+            ' Запрос = Новый Запрос("ВЫБРАТЬ * ИЗ Справочник.Х ГДЕ &Отбор");\n'
+            ' УстановитьОтбор(Запрос);\n'
+            ' Другой = Новый Запрос("ВЫБРАТЬ * ИЗ Справочник.Х ГДЕ &Условие");\n'
+            ' УстановитьУточнение(Другой.Текст);\n'
+            'КонецПроцедуры\n')
+        f, _ = self.t.scan(self.t.src / "Catalogs")
+        self.assertNotIn("QueryParamMismatch", keys(f))
+
+    def test_query_param_module_variable_cross_procedure_clean(self):
+        self.t.catalog()
+        self.t.write(
+            "Catalogs/ТестСправочник/ObjectModule.bsl",
+            'Перем ОбщийЗапрос;\n'
+            'Процедура Инициализировать()\n'
+            ' ОбщийЗапрос = Новый Запрос("ВЫБРАТЬ * ИЗ Справочник.Х ГДЕ К = &Ключ");\n'
+            'КонецПроцедуры\n'
+            'Процедура ВыполнитьЗапрос()\n'
+            ' ОбщийЗапрос.УстановитьПараметр("Ключ", Значение);\n'
+            'КонецПроцедуры\n')
         f, _ = self.t.scan(self.t.src / "Catalogs")
         self.assertNotIn("QueryParamMismatch", keys(f))
 

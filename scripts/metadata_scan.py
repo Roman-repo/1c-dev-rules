@@ -175,16 +175,10 @@ ADMIN_REQUIRED_RIGHTS = (
     "ExclusiveMode", "ConfigurationExtensionsAdministration",
 )
 OPEN_EXT_REQUIRED_RIGHTS = ("InteractiveOpenExtDataProcessors", "InteractiveOpenExtReports")
-UUID_RE = re.compile(r"\b[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}"
-                     r"-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\b")
 MDREF_RE = re.compile(r"\b(?:Catalog|Document|DataProcessor|InformationRegister"
                           r"|AccumulationRegister|Constant|ChartOfCharacteristicTypes"
                           r"|Report|CommonModule|ScheduledJob|HTTPService|WebService"
                           r"|EventSubscription)\.[\wЁёА-Яа-я.-]+")
-DIRECTIVES_RE = re.compile(
-    r"^(НаКлиенте|НаСервере|НаСервереБезКонтекста|НаКлиентеНаСервере|НаКлиентеНаСервереБезКонтекста"
-    r"|НаКлиентеНаСервереБезВозвратаНаКлиента|НаКлиентеНаСервереБезКонтекстаВозвратНаКлиента"
-    r"|Перед|После|Вместо|ИзменениеИКонтроль)$")
 
 
 # --- находка -------------------------------------------------------------------
@@ -392,7 +386,11 @@ class Context:
             cache_file = self.cache_dir / f"metadata-index-{self._tree_key()[:24]}.json"
             if self._load_index(cache_file):
                 return
-        rx_bytes = re.compile(UUID_RE.pattern.encode())
+        # Для проектного индекса берём только атрибуты-определения UUID.
+        # Произвольный UUID в .form или <extendedConfigurationObject> — ссылка
+        # на существующий объект, а не коллизия (dogfood TOIR, META-003).
+        uuid_attrs = re.compile(
+            rb'\b(?:uuid|typeId|valueTypeId)="([0-9a-fA-F-]{36})"')
         have_roles = have_subs = False
         for p in sorted(self.src_root.rglob("*")):
             if not p.is_file() or p.suffix not in (".mdo", ".form", ".rights"):
@@ -401,8 +399,9 @@ class Context:
                 data = p.read_bytes()
             except OSError:
                 continue
-            for uu in rx_bytes.findall(data):
-                self._uuid_files.setdefault(uu.decode().lower(), set()).add(p)
+            if p.suffix == ".mdo":
+                for uu in uuid_attrs.findall(data):
+                    self._uuid_files.setdefault(uu.decode().lower(), set()).add(p)
             rel = p.relative_to(self.src_root)
             if rel.parts and rel.parts[0] == "Roles":
                 if p.suffix != ".rights":
@@ -434,7 +433,7 @@ class Context:
             self._save_index(cache_file, have_roles, have_subs)
 
     # формат индекса: правки сериализации/семантики — бампить версию
-    INDEX_CACHE_VERSION = 2
+    INDEX_CACHE_VERSION = 3
 
     def _tree_key(self) -> str:
         """Хэш входов индекса: дерево src (путь/размер/mtime читаемых
@@ -945,29 +944,98 @@ def object_modules(obj: MdoObject) -> List[Path]:
     return mods
 
 
+BSL_STRING_RE = re.compile(r'"((?:[^"]|"")*)"', re.DOTALL)
+BSL_PROC_RE = re.compile(
+    r"^[ \t]*(?:Процедура|Функция)\b.*?"
+    r"^[ \t]*(?:КонецПроцедуры|КонецФункции)\b",
+    re.IGNORECASE | re.MULTILINE | re.DOTALL)
+BSL_QUERY_VAR_RE = re.compile(
+    r"\b([A-Za-zА-Яа-яЁё_]\w*)\s*=\s*Новый\s+Запрос\b",
+    re.IGNORECASE)
+
+
+def query_param_mismatches(text: str) -> List[str]:
+    """Сравнивает параметры каждого запроса внутри отдельной процедуры.
+
+    Общее множество по модулю давало ложняки на разных запросах и HTML-
+    entities в обычных строках (полный dogfood TOIR). Динамический текст без
+    строкового литерала пропускаем: связь параметров нельзя вывести статически.
+    Если запрос или его текст переданы другой процедуре, локальный анализ
+    также прекращаем: вызванный код может установить параметры или заменить
+    шаблоны. Для явных переменных модуля установки ищем по всему модулю.
+    """
+    blocks = [m.group(0) for m in BSL_PROC_RE.finditer(text)] or [text]
+    module_variables = {
+        name.strip().casefold()
+        for declaration in re.findall(
+            r"^\s*Перем\s+([^;]+);", text, re.IGNORECASE | re.MULTILINE)
+        for name in declaration.split(",")}
+    out: List[str] = []
+    for block in blocks:
+        variables = sorted({m.group(1) for m in BSL_QUERY_VAR_RE.finditer(block)})
+        for var in variables:
+            esc = re.escape(var)
+            if re.search(
+                    rf'(?:\(|,)\s*{esc}(?:\s*\.\s*Текст)?\s*(?:,|\))',
+                    block, re.IGNORECASE):
+                continue
+            bindings = text if var.casefold() in module_variables else block
+            expressions = [m.group(1) for m in re.finditer(
+                rf"\b{esc}\s*=\s*Новый\s+Запрос\s*\((.*?)\)\s*;",
+                block, re.IGNORECASE | re.DOTALL)]
+            expressions.extend(m.group(1) for m in re.finditer(
+                rf"\b{esc}\s*\.\s*Текст\s*=\s*(.*?);",
+                block, re.IGNORECASE | re.DOTALL))
+            literals = [part for expr in expressions
+                        for part in BSL_STRING_RE.findall(expr)]
+            if not any(part.strip() for part in literals):
+                continue
+            query_text = re.sub(r"&&[\wЁё]+", "", "\n".join(literals))
+            param_names = re.findall(
+                r"&([A-Za-zА-Яа-яЁё_]\w*)", query_text)
+            display_names = {name.casefold(): name for name in param_names}
+            qparams = set(display_names)
+            setparams = {name.casefold() for name in re.findall(
+                rf'\b{esc}\s*\.\s*УстановитьПараметр\s*\(\s*"([^"]+)"',
+                bindings, re.IGNORECASE)}
+            setparams.update(name.casefold() for name in re.findall(
+                rf'\b{esc}\s*\.\s*Параметры\s*\.\s*Вставить\s*\(\s*"([^"]+)"',
+                bindings, re.IGNORECASE))
+            # Текст может быть передан динамическому списку: тогда параметр
+            # устанавливается уже у списка, а не у исходного объекта Запрос.
+            setparams.update(name.casefold() for name in re.findall(
+                r'\.\s*Параметры\s*\.\s*УстановитьЗначениеПараметра\s*'
+                r'\(\s*"([^"]+)"', block, re.IGNORECASE))
+            # Параметр может быть местом подстановки имени таблицы/поля,
+            # а не значением (типовой паттерн БСП). В литерале поиска перед
+            # и после &X могут быть другие символы: "И &X", "&X,".
+            replacements = re.findall(
+                r'СтрЗаменить\s*\(\s*[^,]+,\s*"((?:[^"]|"")*)"',
+                bindings, re.IGNORECASE | re.DOTALL)
+            replaced = {name.casefold() for part in replacements
+                        for name in re.findall(
+                            r"&([A-Za-zА-Яа-яЁё_]\w*)", part)}
+            qparams.difference_update(replaced)
+            only_text = sorted(display_names[name]
+                               for name in qparams - setparams)
+            if only_text:
+                # Обратное сравнение (лишний УстановитьПараметр) не делаем:
+                # текст запроса может собираться динамически после присвоения.
+                out.append(f"запрос «{var}»: есть в &X, нет в "
+                           "УстановитьПараметр/Параметры.Вставить: "
+                           + ", ".join(only_text))
+    return out
+
+
 def check_query_params(obj: MdoObject) -> List[Finding]:
     if obj.mtype == "Report":  # параметры отчёта связаны через СКД, не через код
         return []
-    mods = object_modules(obj)
-    if not mods:
-        return []
-    texts = [read_text(m) for m in mods]
-    joined = "\n".join(texts)
-    joined = re.sub(r"&&[\wЁё]+", "", joined)  # &&Маркер — подстановка СтрЗаменить
-    qparams = {t for t in re.findall(r"&([А-Яа-яA-Za-zЁё_]+)", joined)
-               if not DIRECTIVES_RE.match(t)}
-    setparams = set(re.findall(r'УстановитьПараметр\("([^"]+)"', joined))
-    only_text = sorted(qparams - setparams)
-    only_call = sorted(setparams - qparams)
-    if not only_text and not only_call:
-        return []
-    detail = []
-    if only_text:
-        detail.append("есть в &X, нет в УстановитьПараметр: " + ", ".join(only_text))
-    if only_call:
-        detail.append("есть в УстановитьПараметр, нет в &X: " + ", ".join(only_call))
-    return [_rule_finding("QueryParamMismatch", obj, "УстановитьПараметр",
-                          "; ".join(detail))]
+    out: List[Finding] = []
+    for module in object_modules(obj):
+        for detail in query_param_mismatches(read_text(module)):
+            out.append(_rule_finding(
+                "QueryParamMismatch", obj, "УстановитьПараметр", detail))
+    return out
 
 
 # --- сбор объектов ---------------------------------------------------------------
