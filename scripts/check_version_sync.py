@@ -9,9 +9,12 @@ check_version_sync.py — проверка синхронности версии
   - README.md               → заголовок H1 «# <имя> — X.Y.Z»
   - README.md               → бейдж [![Version: X.Y.Z](…badge/version-X.Y.Z-blue.svg)]
   - README.md               → строка статуса «**Текущий: ✅ vX.Y.Z**»
+  - docs/next-session-prompt.md → пять маркеров актуальной версии
+    (исторические упоминания прошлых релизов не проверяются)
 
-Запускается в CI на каждый push/PR; bump-version.sh держит всё синхронным,
-этот скрипт — страховка от ручных правок README/манифестов мимо скрипта.
+Запускается в CI на каждый push/PR; bump-version.sh обновляет манифесты и README,
+а актуальные маркеры next-session-prompt.md синхронизируются при обновлении контекста.
+Скрипт — страховка от ручных правок и пропущенных маркеров.
 
 Использование:
     python3 scripts/check_version_sync.py [PATH_TO_PLUGIN_ROOT]
@@ -66,6 +69,35 @@ def check_readme(readme_path: Path, expected: str) -> List[str]:
     return errors
 
 
+NEXT_SESSION_MARKERS = (
+    ("H1", re.compile(r"^# .*ПЛАГИН (\d+\.\d+\.\d+)\b", flags=re.M)),
+    ("контекст", re.compile(r"Контекст:\s*плагин 1c-dev-rules \*\*(\d+\.\d+\.\d+)\*\*")),
+    ("итоговая проверка", re.compile(r"Плагин 1c-\* v(\d+\.\d+\.\d+)\b")),
+    ("команда обновления", re.compile(r"обновлять до (\d+\.\d+\.\d+) rsync")),
+    ("верификация доставки", re.compile(r"верификация доставки (\d+\.\d+\.\d+)\b")),
+)
+
+
+def check_next_session_prompt(path: Path, expected: str) -> List[str]:
+    """Сверяет только маркеры текущей версии, не историю прошлых релизов."""
+    if not path.is_file():
+        return [f"next-session-prompt.md не найден: {path}"]
+    text = path.read_text(encoding="utf-8")
+
+    errors: List[str] = []
+    for label, pattern in NEXT_SESSION_MARKERS:
+        found = pattern.findall(text)
+        if not found:
+            errors.append(f"next-session-prompt.md, {label}: маркер версии не найден")
+            continue
+        for version in found:
+            if version != expected:
+                errors.append(
+                    f"next-session-prompt.md, {label}: версия {version}, ожидалась {expected}"
+                )
+    return errors
+
+
 def main(argv: List[str]) -> int:
     root = Path(argv[1]).resolve() if len(argv) > 1 else Path(__file__).resolve().parent.parent
 
@@ -91,15 +123,16 @@ def main(argv: List[str]) -> int:
             errors.append(f"kimi.plugin.json: версия {kimi}, ожидалась {expected}")
 
     errors.extend(check_readme(root / "README.md", expected))
+    errors.extend(check_next_session_prompt(root / "docs" / "next-session-prompt.md", expected))
 
     if errors:
         print("\nРАССИНХРОН:")
         for e in errors:
             print(f"  ✗ {e}")
-        print("\nИсправление: bash scripts/bump-version.sh <версия> — обновит все места атомарно.")
+        print("\nИсправление: синхронизируйте манифесты, README и актуальные маркеры next-session-prompt.md.")
         return 1
 
-    print("✓ Версия синхронна: plugin.json, marketplace.json, kimi.plugin.json, README (H1 + бейдж + статус)")
+    print("✓ Версия синхронна: манифесты, README (H1 + бейдж + статус), next-session-prompt.md")
     return 0
 
 
