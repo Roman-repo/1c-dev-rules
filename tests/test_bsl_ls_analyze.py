@@ -662,12 +662,11 @@ class TestCoverageReport(unittest.TestCase):
         self.assertGreaterEqual(s["layer2"], 100)
         self.assertGreater(s["combined"], s["layer2"])  # слой 1 добавляет своё
         self.assertGreater(s["combined"], s["layer2"] + s["meta_layer"] - 2)
-        # замок: 135 было до META-002 (слои 1∪2); +14 каталогных metadata-ключей
-        # (пересечение со слоем 2 — MetadataNameLongerThan, SameMetadataNames)
-        self.assertEqual(s["combined"], 149)
-        self.assertEqual(s["pct"], "46,3")
-        self.assertEqual(s["meta_layer"], 16)           # каталогные из CHECKS
-        self.assertEqual(s["sections"]["metadata"], 18)  # было 4 (слой 2)
+        # замок: 149 было до META-003; +4 каталогных правила стандартных ролей
+        self.assertEqual(s["combined"], 153)
+        self.assertEqual(s["pct"], "47,5")
+        self.assertEqual(s["meta_layer"], 20)           # каталогные из CHECKS
+        self.assertEqual(s["sections"]["metadata"], 22)  # было 18 после META-002
         self.assertEqual(len(s["layer1_local"]), 2)     # правила стиля AGENTS.md
         self.assertEqual(s["local_cards"], len(wrapper.LOCAL_CATALOG))
 
@@ -803,6 +802,27 @@ class TestMetadataMerge(unittest.TestCase):
         mf, me, ran = wrapper.run_metadata(None, [bsl], None)
         self.assertFalse(ran)               # отклонение 1а: без шума
         self.assertEqual((mf, me), ([], []))
+
+    def test_run_and_cli_rights_only_without_java(self):
+        """META-003: дифф/вход только .rights не исчезает и не требует Java."""
+        role = self.src / "Roles" / "АдминистраторСистемы"
+        role.mkdir(parents=True)
+        rights = role / "Rights.rights"
+        rights.write_text("<Rights><setForNewObjects>false</setForNewObjects></Rights>",
+                          encoding="utf-8")
+        mf, _me, ran = wrapper.run_metadata(None, [rights], self.src)
+        self.assertTrue(ran)
+        self.assertIn("AdminRightsWithoutNecessaryRights", {f.key for f in mf})
+        rc, out, _err = self._cli(str(rights), "--src-root", str(self.src),
+                                  "--format", "json",
+                                  "--java", "/nonexistent-java",
+                                  "--jar", "/nonexistent.jar")
+        self.assertEqual(rc, 1)
+        data = json.loads(out)
+        self.assertIn("AdminRightsWithoutNecessaryRights",
+                      {f["key"] for f in data["findings"]})
+        self.assertTrue(all(f["ls_code"] == wrapper.META_LAYER_MARK
+                            for f in data["findings"]))
 
     def test_meta_findings_local_key_has_no_docs(self):
         finding = meta.Finding("ObjectNotInConfiguration", "red", "t", "", "local",

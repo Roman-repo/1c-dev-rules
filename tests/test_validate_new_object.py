@@ -111,8 +111,13 @@ class ValidateNewObjectCase(unittest.TestCase):
         config += "</Configuration>\n"
         write(self.src / "Configuration" / "Configuration.mdo", config)
         if not broken:
-            write(self.src / "Roles" / "ТестоваяРоль" / "Role.rights",
-                  "<Rights>\n\t<object>Catalog.ТестовыйСправочник</object>\n</Rights>\n")
+            write(self.src / "Roles" / "ТестоваяРоль" / "Rights.rights",
+                  "<Rights>\n"
+                  "\t<object>\n"
+                  "\t\t<name>Catalog.ТестовыйСправочник</name>\n"
+                  "\t\t<right><name>Use</name><value>true</value></right>\n"
+                  "\t</object>\n"
+                  "</Rights>\n")
         return obj
 
     def make_scheduled_job(self, broken: bool = False) -> Path:

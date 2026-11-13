@@ -9,8 +9,8 @@ regex-сканером checkbsl_scan.py и ручным проходом Рев�
 локальных правила стиля вне каталога), ИИ-проход по каталогу вероятностен
 (~60–70% номинально). Слой 2 (BSL LS) детерминированно закрывает 129 ключей
 каталога из 322 (40%) через прямые совпадения и таблицу ALIAS; слой
-метаданных (metadata_scan.py, XML .mdo/.rights — META-002) — ещё 16;
-слои 1 ∪ 2 ∪ метаданные — 149 ключей (46,3%; счётчик: --coverage-report).
+метаданных (metadata_scan.py, XML .mdo/.rights — META-002/003) — ещё 20;
+слои 1 ∪ 2 ∪ метаданные — 153 ключей (47,5%; счётчик: --coverage-report).
 Остальные ключи каталога — за чек-листом и ручным проходом. Немапленные
 🔴-диагностики BSL LS (важность Блокирующий/Критичный) получают локальные
 карточки LOCAL_CATALOG — № стандарта и fixes без карточки docs.checkbsl.org.
@@ -747,11 +747,12 @@ def run_metadata(ref: Optional[str], paths: List[Path],
     if not inputs:
         return [], [], False
     objects = meta_scan.collect_mdo(inputs)
-    if not objects:
+    roles = meta_scan.collect_rights(inputs)
+    if not objects and not roles:
         return [], [], False
-    root = src_root or meta_scan.infer_src_root(objects, None)
+    root = src_root or meta_scan.infer_src_root(objects, None, roles)
     ctx = meta_scan.Context(root, objects, cache_dir=cache_dir)
-    mf, _suppressed = meta_scan.scan(objects, ctx, [])
+    mf, _suppressed = meta_scan.scan(objects, ctx, [], roles)
     findings, extra = meta_findings_to_pool(mf)
     return findings, extra, True
 

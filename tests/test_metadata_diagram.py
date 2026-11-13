@@ -132,12 +132,13 @@ class TestTokens(unittest.TestCase):
                     "DefinedType.ТиповойСостав", ""):
             self.assertIsNone(diag.ref_token(raw), raw)
 
-    def test_direct_token_rejects_role_and_suffixed(self):
-        # прямые значения уже с голым видом: Role.*/склейки мусора — мимо;
-        # суффиксы Ref НЕ снимаются (иначе CatalogRef.X прошёл бы дважды)
+    def test_direct_token_accepts_role_and_rejects_suffixed(self):
+        # Прямые значения уже с голым видом принимаются, включая роли;
+        # суффиксы Ref НЕ снимаются (иначе CatalogRef.X прошёл бы дважды).
         self.assertEqual(diag.direct_token("AccumulationRegister.Р1"),
                          "AccumulationRegister.Р1")
-        self.assertIsNone(diag.direct_token("Role.ПолныеПрава"))
+        self.assertEqual(diag.direct_token("Role.ПолныеПрава"),
+                         "Role.ПолныеПрава")
         self.assertIsNone(diag.direct_token("CatalogRef.Номенклатура"))
         self.assertIsNone(diag.direct_token("CatalogRef"))
         self.assertIsNone(diag.direct_token("мусор без точки"))
@@ -203,7 +204,8 @@ class TestExtractEdges(unittest.TestCase):
                                                    "Role.ПолныеПрава"))
         self.assertEqual(self.edges(p), [
             ("Subsystem.Учёт", "Catalog.С1", "composition"),
-            ("Subsystem.Учёт", "Document.Д1", "composition")])
+            ("Subsystem.Учёт", "Document.Д1", "composition"),
+            ("Subsystem.Учёт", "Role.ПолныеПрава", "composition")])
 
     def test_broken_xml_no_edges(self):
         p = self.t.write("Catalogs/Битый/Битый.mdo", "<not-xml…")
