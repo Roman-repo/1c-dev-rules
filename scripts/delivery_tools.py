@@ -25,7 +25,9 @@ delivery_tools.py — состояние задачи конвейера раз�
 """
 from __future__ import annotations
 
+import hashlib
 import re
+import subprocess
 import sys
 from dataclasses import dataclass, field
 from datetime import date, datetime
@@ -169,15 +171,32 @@ def read_text(path: Path) -> str:
 # --- парсеры артефактов -----------------------------------------------------
 
 @dataclass
+class QuestionRow:
+    qid: str
+    question: str
+    blocking: bool
+    owner: str
+    status: str
+    resolution: str
+
+    @property
+    def closed(self) -> bool:
+        return self.status.strip().lower() in ("закрыт", "закрыто", "принят риск", "риск принят", "допущение")
+
+
+@dataclass
 class Brief:
     task_id: str = ""
     name: str = ""
     epic: str = ""                                              # ID эпика из поля «Эпик» (если задача в эпике)
-    criteria: List[Tuple[str, str, str]] = field(default_factory=list)  # (№, критерий, как проверим)
+    doc_profile: str = "standard"                              # standard / light — глубина, не ослабление гейтов
+    criteria: List[Tuple[str, str, str]] = field(default_factory=list)  # (FR-ID, критерий, как проверим)
+    questions: List[QuestionRow] = field(default_factory=list)
     confirm_checked: int = 0
     confirm_unchecked: int = 0
     confirm_section_found: bool = False
     retrospective_filled: bool = False  # секция есть и без заглушек «<…>» — петля оценки закрыта
+    pipeline_improvements_filled: bool = False
 
 
 def parse_brief(path: Path) -> Brief:
@@ -190,19 +209,43 @@ def parse_brief(path: Path) -> Brief:
     m = re.search(r"\*\*Эпик:\*\*\s*([A-Za-z0-9_\-]+)", text)
     if m and not m.group(1).startswith("<"):
         brief.epic = m.group(1)
+    m = re.search(r"Профиль документации[^:\n]*:\s*\*{0,2}\s*(standard|light)", text, re.I)
+    if m:
+        brief.doc_profile = m.group(1).lower()
     crit_sec = find_section(sections, "Критерии успеха")
     if crit_sec:
         headers, rows = table_rows(crit_sec)
         i_num, i_text, i_check = col_index(headers, "№"), col_index(headers, "Критерий"), col_index(headers, "проверим")
         for r in rows:
-            text = cell(r, i_text)
-            if text:  # пустые строки — заглушки шаблона
-                brief.criteria.append((cell(r, i_num), text, cell(r, i_check)))
+            criterion = cell(r, i_text)
+            if criterion:  # пустые строки — заглушки шаблона
+                brief.criteria.append((cell(r, i_num), criterion, cell(r, i_check)))
+    questions_sec = find_section(sections, "Реестр вопросов")
+    if questions_sec:
+        headers, rows = table_rows(questions_sec)
+        indexes = {
+            "qid": col_index(headers, "ID"), "question": col_index(headers, "Вопрос"),
+            "blocking": col_index(headers, "Блокирует"), "owner": col_index(headers, "Ответственный"),
+            "status": col_index(headers, "Статус"), "resolution": col_index(headers, "Решение"),
+        }
+        for r in rows:
+            qid, question = cell(r, indexes["qid"]), cell(r, indexes["question"])
+            if not qid or qid.startswith("<") or not question or question.startswith("<"):
+                continue
+            brief.questions.append(QuestionRow(
+                qid=qid, question=question,
+                blocking=cell(r, indexes["blocking"]).strip().lower() in ("да", "yes", "true", "🔴"),
+                owner=cell(r, indexes["owner"]), status=cell(r, indexes["status"]),
+                resolution=cell(r, indexes["resolution"]),
+            ))
     conf = find_section(sections, "Подтверждение инициатора")
     brief.confirm_section_found = conf is not None
     brief.confirm_checked, brief.confirm_unchecked = checkboxes(conf)
     retro = find_section(sections, "Ретроспектив")
-    brief.retrospective_filled = bool(retro) and "<" not in retro
+    base_retro = retro.split("Улучшения пайплайна", 1)[0] if retro else ""
+    brief.retrospective_filled = bool(base_retro) and "<" not in base_retro
+    improvements = retro.split("Улучшения пайплайна", 1)[1] if retro and "Улучшения пайплайна" in retro else ""
+    brief.pipeline_improvements_filled = bool(improvements) and "<" not in improvements
     return brief
 
 
@@ -214,6 +257,9 @@ class MatrixRow:
     obj: str
     check: str
     status: str
+    requirement: str = ""
+    status_05: str = ""
+    status_06: str = ""
 
     def empty_trace_cols(self) -> List[str]:
         """Пустые (не «Статус») ячейки: '' → пустая, '—' отдельно не различаем тут."""
@@ -226,17 +272,14 @@ class MatrixRow:
 
 @dataclass
 class DesignReview:
-    """Решение Оркестратора по пакету 02/03/04 (этап 3 «Согласование»).
-
-    Источник — артефакт 04a «Лист замечаний» (0.19.0+); штамп в секции
-    «Согласование Оркестратора» артефакта 04 — legacy-формат 0.18.0,
-    читается как фолбэк, когда 04a нет."""
+    """Решение Оркестратора по пакету 01–04 и его ревизии."""
 
     source: str = ""                  # "04a" | "04 (0.18.0)"
     checked: List[str] = field(default_factory=list)
     decision: Optional[str] = None    # «Согласовано» / «Доработать»
     mode: str = ""                    # manual/auto из штампа (пусто — не указан)
     date: str = ""
+    revision: str = ""                # sha256:<64 hex> согласованного пакета 01–04
 
     @classmethod
     def from_section(cls, section_text: str, source: str) -> "DesignReview":
@@ -252,6 +295,9 @@ class DesignReview:
         m = re.search(r"Дата[^:\n]*:\s*\*{0,2}\s*(\d{4}-\d{2}-\d{2}|\d{2}\.\d{2}\.\d{4})", section_text)
         if m:
             review.date = m.group(1)
+        m = re.search(r"Ревизия пакета 01[–-]04[^:\n]*:\s*\*{0,2}\s*`?(sha256:[0-9a-fA-F]{64})", section_text, re.I)
+        if m:
+            review.revision = m.group(1).lower()
         return review
 
 
@@ -266,18 +312,14 @@ def parse_design_review(path: Path) -> DesignReview:
 
 @dataclass
 class CodeReview:
-    """Решение Ревьюера по коду задачи (этап 6 «Код ревью»).
-
-    Источник — артефакт 05a «Лист код-ревью» (0.23.0+). Строка «Входные
-    проверки разработки: code-review ✅» в шапке 05 фолбэком НЕ является:
-    это самопрогон Исполнителя на этапе «Разработка» (гейт 4→5), не решение
-    Ревьюера — задачи без 05a получают WARN без блокировки (как с 04a)."""
+    """Решение Ревьюера по конкретному commit кода задачи."""
 
     source: str = ""                  # "05a" | "05 (шапка, до 0.23.0)"
     checked: List[str] = field(default_factory=list)
     decision: Optional[str] = None    # «Одобрено» / «Доработать»
     mode: str = ""                    # manual/auto из листа (пусто — не указан)
     date: str = ""
+    revision: str = ""                # проверенный git commit
 
     @classmethod
     def from_section(cls, section_text: str, source: str) -> "CodeReview":
@@ -293,6 +335,9 @@ class CodeReview:
         m = re.search(r"Дата[^:\n]*:\s*\*{0,2}\s*(\d{4}-\d{2}-\d{2}|\d{2}\.\d{2}\.\d{4})", section_text)
         if m:
             review.date = m.group(1)
+        m = re.search(r"Проверенный commit[^:\n]*:\s*\*{0,2}\s*`?([0-9a-fA-F]{7,64})", section_text, re.I)
+        if m:
+            review.revision = m.group(1).lower()
         return review
 
 
@@ -353,22 +398,31 @@ def parse_matrix(path: Path) -> Matrix:
         matrix.parse_error = "таблица критериев (колонка «Критерий») в секции не найдена"
         return matrix
     headers, rows = matrix_tables[0]
+    num_col = col_index(headers, "№")
+    if num_col is None:
+        num_col = col_index(headers, "AC-ID")
     idx = {
-        "num": col_index(headers, "№"), "criterion": col_index(headers, "Критерий"),
+        "num": num_col, "criterion": col_index(headers, "Критерий"),
         "step": col_index(headers, "Шаг"), "obj": col_index(headers, "Объект"),
-        "check": col_index(headers, "Проверка"),
+        "check": col_index(headers, "Проверка"), "requirement": col_index(headers, "Требование"),
     }
     # статусы: одна колонка «Статус» (формат до 0.13.0) или две — «Статус 05»/«Статус 06»
     status_cols = [i for i, h in enumerate(headers) if "статус" in h.lower()]
+    status_05_col = next((i for i in status_cols if "05" in headers[i]), None)
+    status_06_col = next((i for i in status_cols if "06" in headers[i]), None)
     for r in rows:
         criterion = cell(r, idx["criterion"])
         if not criterion:  # заглушка шаблона
             continue
+        status_05 = cell(r, status_05_col) if status_05_col is not None else ""
+        status_06 = cell(r, status_06_col) if status_06_col is not None else ""
         matrix.rows.append(MatrixRow(
             num=cell(r, idx["num"]), criterion=criterion,
             step=cell(r, idx["step"]), obj=cell(r, idx["obj"]),
-            check=cell(r, idx["check"]),
+            check=cell(r, idx["check"]), requirement=cell(r, idx["requirement"]),
             status=" ".join(cell(r, i) for i in status_cols).strip(),
+            status_05=status_05 or (cell(r, status_cols[0]) if len(status_cols) == 1 else ""),
+            status_06=status_06,
         ))
     return matrix
 
@@ -587,11 +641,136 @@ def read_conveyor_mode(task_dir: Path) -> str:
     return "manual"
 
 
+def read_conveyor_profile(task_dir: Path) -> str:
+    """Профиль артефактов: current по умолчанию, legacy только по явной записи.
+
+    legacy сохраняет прежние WARN для исторических задач; новые задачи не должны
+    наследовать это ослабление неявно.
+    """
+    mode_file = task_dir.parent / MODE_FILE
+    if mode_file.is_file():
+        m = re.search(r"^\s*profile:\s*(current|legacy)\s*$", read_text(mode_file), re.M | re.I)
+        if m:
+            return m.group(1).lower()
+    return "current"
+
+
+def _without_dynamic_sections(text: str) -> str:
+    """История и ретроспектива не меняют смысл согласованных требований."""
+    return re.sub(
+        r"^##\s+(?:История изменений|Ретроспектива)\b.*?(?=^##\s+|\Z)",
+        "", text, flags=re.M | re.S,
+    )
+
+
+def _without_acceptance_statuses(text: str) -> str:
+    """Убрать колонки 05/06: их заполнение не меняет утверждённые критерии."""
+    out: List[str] = []
+    drop: List[int] = []
+    for line in text.splitlines():
+        if not line.strip().startswith("|"):
+            drop = []
+            out.append(line)
+            continue
+        cells = [c.strip() for c in line.strip().strip("|").split("|")]
+        if any(re.fullmatch(r"Статус\s+0[56]", c, re.I) for c in cells):
+            drop = [i for i, c in enumerate(cells) if re.fullmatch(r"Статус\s+0[56]", c, re.I)]
+        for i in sorted(drop, reverse=True):
+            if i < len(cells):
+                cells.pop(i)
+        out.append("| " + " | ".join(cells) + " |")
+    return "\n".join(out) + ("\n" if text.endswith("\n") else "")
+
+
+def package_revision(task_dir: Path) -> str:
+    """Стабильный SHA-256 смыслового пакета 01–04 для поля 04a."""
+    digest = hashlib.sha256()
+    for n in (1, 2, 3, 4):
+        path = task_dir / ARTIFACTS[n]
+        if not path.is_file():
+            return ""
+        text = _without_dynamic_sections(read_text(path))
+        if n == 4:
+            text = _without_acceptance_statuses(text)
+        digest.update(ARTIFACTS[n].encode("utf-8") + b"\0")
+        digest.update(text.encode("utf-8") + b"\0")
+    return "sha256:" + digest.hexdigest()
+
+
+def design_revision_error(state: TaskState) -> str:
+    approval = state.approval
+    if not approval or approval.decision != "Согласовано" or read_conveyor_profile(state.task_dir) == "legacy":
+        return ""
+    current = package_revision(state.task_dir)
+    if not approval.revision:
+        return "в 04a не зафиксирована «Ревизия пакета 01–04» (команда: delivery_tools.py revision)"
+    if current and approval.revision != current:
+        return f"пакет 01–04 изменился после согласования — Требуется повторно ({approval.source}: {approval.revision}, текущий: {current})"
+    return ""
+
+
+def _git(task_dir: Path, args: List[str]) -> Optional[subprocess.CompletedProcess]:
+    try:
+        result = subprocess.run(["git", "-C", str(task_dir)] + args, text=True, capture_output=True, check=False)
+    except OSError:
+        return None
+    return result if result.returncode == 0 else None
+
+
+def current_git_commit(task_dir: Path) -> str:
+    result = _git(task_dir, ["rev-parse", "HEAD"])
+    return result.stdout.strip() if result else ""
+
+
+def code_changes_since(task_dir: Path, revision: str) -> Tuple[Optional[List[str]], str]:
+    """Изменённые tracked-файлы от проверенного commit до рабочего дерева.
+
+    Каталог артефактов задачи исключён: обновление 04/05/06 не меняет код.
+    None означает, что git/ревизия недоступны; это отдельно сообщается вызвавшему.
+    """
+    root_result = _git(task_dir, ["rev-parse", "--show-toplevel"])
+    if not root_result:
+        return None, "каталог не находится в git-репозитории"
+    root = Path(root_result.stdout.strip())
+    if not _git(task_dir, ["rev-parse", "--verify", revision + "^{commit}"]):
+        return None, f"проверенный commit {revision} не найден"
+    task_rel = task_dir.resolve().relative_to(root.resolve()).as_posix()
+    if task_rel == ".":
+        names = list(ARTIFACTS.values()) + [DESIGN_REVIEW, CODE_REVIEW, REWORK_LIST, PROTOCOL_GLOB]
+        excludes = [f":(exclude){name}" for name in names]
+    else:
+        excludes = [f":(exclude){task_rel}/**"]
+    excludes.append(":(exclude)docs/delivery/_releases/**")
+    result = _git(root, ["diff", "--name-only", revision, "--", "."] + excludes)
+    if not result:
+        return None, "не удалось сравнить код с проверенным commit"
+    return [line for line in result.stdout.splitlines() if line.strip()], ""
+
+
+def code_revision_error(state: TaskState) -> str:
+    review = state.code_review
+    if not review or review.decision != "Одобрено" or read_conveyor_profile(state.task_dir) == "legacy":
+        return ""
+    if not review.revision:
+        return "в 05a не зафиксирован «Проверенный commit» (команда: delivery_tools.py revision)"
+    changed, error = code_changes_since(state.task_dir, review.revision)
+    if error:
+        return "WARN: " + error + "; актуальность кода после ревью проверьте вручную"
+    if changed:
+        return "код изменился после ревью — Требуется повторно: " + ", ".join(changed[:10])
+    return ""
+
+
 def next_step(state: TaskState) -> List[str]:
     """Рекомендованные следующие шаги по лестнице состояний (эвристика, не решение)."""
     steps: List[str] = []
     if not state.brief:
         return ["создать 01-task-brief.md по шаблону 1c-planning"]
+    open_questions = [q.qid for q in state.brief.questions if not q.closed]
+    if open_questions:
+        steps.append(f"DoD 1→2: закрыть вопросы {fmt_nums(open_questions)} — получить ответы, обновить FR/сценарий/критерии")
+        if read_conveyor_profile(state.task_dir) == "current":
+            return steps
     if state.brief.confirm_section_found and state.brief.confirm_unchecked:
         steps.append("DoD 1→2: подтверждение инициатора не завершено (неотмеченные пункты в 01)")
     missing_design = [ARTIFACTS[n] for n in (2, 3, 4) if not (state.task_dir / ARTIFACTS[n]).is_file()]
@@ -603,11 +782,15 @@ def next_step(state: TaskState) -> List[str]:
             steps.append(f"матрица 04: пустые ячейки трассировки у критериев {fmt_nums(empties)} (DoD 2→3)")
     if not (state.task_dir / ARTIFACTS[5]).is_file() and not missing_design:
         approval = state.approval
-        approved = approval is not None and approval.decision == "Согласовано"
+        revision_error = design_revision_error(state)
+        approved = approval is not None and approval.decision == "Согласовано" and not revision_error
         if not approved:
             mode = read_conveyor_mode(state.task_dir)
-            steps.append(f"этап 3 Согласование (режим {mode}): предъявить пакет 02/03/04 Оркестратору → "
-                         f"лист замечаний 04a; в manual код не начинается до «Согласовано»")
+            if revision_error:
+                steps.append("этап 3 Согласование: " + revision_error)
+            else:
+                steps.append(f"этап 3 Согласование (режим {mode}): предъявить пакет 01–04 Оркестратору → "
+                             f"лист 04a с ревизией пакета; в manual код не начинается до «Согласовано»")
         else:
             steps.append("Разработка (1c-dispatch-gate) → внутренняя приёмка (артефакт 05)")
     internal = state.internal
@@ -618,13 +801,20 @@ def next_step(state: TaskState) -> List[str]:
             steps.append("вердикт 05 не завершён (неотмеченные пункты)")
     proto = state.latest_protocol
     review = state.code_review
-    if internal and not internal.red_rows and not proto:
-        if review is not None and review.decision == "Одобрено":
+    pending = [r.num for r in state.matrix.rows if "⏳" in r.status_05] if state.matrix else []
+    if pending and read_conveyor_profile(state.task_dir) == "current":
+        steps.append(f"🔴 Заблокирована средой проверки: критерии {fmt_nums(pending)} ⏳; внешняя приёмка запрещена")
+    if internal and not internal.red_rows and not proto and not pending:
+        revision_error = code_revision_error(state)
+        blocking_revision_error = revision_error and not revision_error.startswith("WARN: ")
+        if review is not None and review.decision == "Одобрено" and not blocking_revision_error:
             steps.append("внешняя приёмка (1c-external-acceptance): демонстрация по матрице 04 → протокол 06")
+        elif blocking_revision_error:
+            steps.append("повторное код ревью: " + revision_error)
         else:
             mode = read_conveyor_mode(state.task_dir)
             steps.append(f"код ревью (1c-code-review, этап 6): чек-лист + каталог checkbsl → лист 05a "
-                         f"(режим каталога: {mode}; в manual внешняя приёмка не начинается до «Одобрено»)")
+                         f"с проверенным commit (режим: {mode}; в manual внешняя приёмка до «Одобрено» запрещена)")
     if review is not None and review.decision == "Доработать" and proto:
         steps.append("🔴 внешняя приёмка начата при решении ревью «Доработать» — возврат в Разработку, "
                      "повтор затронутых проверок 05 и ревью")
@@ -666,7 +856,7 @@ def stage_reached(state: TaskState) -> int:
     if (state.task_dir / DESIGN_REVIEW).is_file():
         reached = max(reached, 3)
         approval = state.approval
-        if approval is not None and approval.decision == "Согласовано":
+        if approval is not None and approval.decision == "Согласовано" and not design_revision_error(state):
             reached = max(reached, 4)
     if (state.task_dir / ARTIFACTS[5]).is_file():
         reached = max(reached, 5)
@@ -872,6 +1062,19 @@ def check_gate_1_2(state: TaskState, out: List[Finding]) -> None:
         out.append(Finding("WARN", gate,
                            f"сравнительные критерии без базлайна «до» в «Как проверим»: {fmt_nums(comparative)} — "
                            f"состояние «до» после разработки не повторить (1c-planning)"))
+    if read_conveyor_profile(state.task_dir) == "current":
+        for q in brief.questions:
+            if not q.owner or not q.status:
+                out.append(Finding("ERR", gate, f"реестр вопросов, {q.qid}: нужны ответственный и статус"))
+            if not q.closed:
+                kind = "блокирующий" if q.blocking else "неблокирующий"
+                out.append(Finding("ERR", gate,
+                                   f"{kind} вопрос {q.qid} не закрыт (статус: {q.status or 'не указан'}) — "
+                                   "нужны решение, допущение или явно принятый риск"))
+            elif not q.resolution or q.resolution == "—" or q.resolution.startswith("<"):
+                out.append(Finding("ERR", gate, f"вопрос {q.qid} закрыт без решения/допущения/принятого риска"))
+        if brief.doc_profile == "light" and not re.search(r"\*\*Оценка:\*\*\s*S\b", read_text(state.task_dir / ARTIFACTS[1]), re.I):
+            out.append(Finding("ERR", gate, "профиль документации light допустим только для задачи класса S"))
     if not brief.confirm_section_found:
         out.append(Finding("ERR", gate, "в 01 нет секции «Подтверждение инициатора» (DoD-гейт)"))
     elif brief.confirm_unchecked:
@@ -901,6 +1104,30 @@ def check_gate_2_3(state: TaskState, out: List[Finding]) -> None:
         for title, val in (("Шаг сценария", r.step), ("Объект/код", r.obj), ("Проверка", r.check)):
             if val == "—":
                 out.append(Finding("WARN", gate, f"04, критерий {r.num}: «{title}» = «—» — проверить, что трассировка не дырявая"))
+    if read_conveyor_profile(state.task_dir) == "current":
+        ac_ids = [r.num for r in matrix.rows]
+        duplicates = sorted({x for x in ac_ids if ac_ids.count(x) > 1})
+        for ac_id in duplicates:
+            out.append(Finding("ERR", gate, f"04: AC-ID {ac_id} повторяется"))
+        scenario_path = state.task_dir / ARTIFACTS[2]
+        scenario_text = read_text(scenario_path) if scenario_path.is_file() else ""
+        known_fr = {c[0] for c in state.brief.criteria} if state.brief else set()
+        known_fr.update(re.findall(r"\bFR-[A-Z0-9-]+\b", scenario_text, re.I))
+        traced_fr = set()
+        for r in matrix.rows:
+            if not re.fullmatch(r"AC-\d+", r.num, re.I):
+                out.append(Finding("ERR", gate, f"04: «{r.num}» не является AC-ID вида AC-01"))
+            refs = re.findall(r"\bFR-[A-Z0-9-]+\b", r.requirement, re.I)
+            if not refs:
+                out.append(Finding("ERR", gate, f"04, {r.num}: не указан FR-ID источника"))
+            for ref in refs:
+                traced_fr.add(ref.upper())
+                if ref.upper() not in {x.upper() for x in known_fr}:
+                    out.append(Finding("ERR", gate, f"04, {r.num}: неизвестный {ref} — нет источника в 01/02"))
+        if state.brief:
+            for fr_id, _, _ in state.brief.criteria:
+                if fr_id.upper() not in traced_fr:
+                    out.append(Finding("ERR", gate, f"требование {fr_id} из 01 не имеет критерия приёмки в 04"))
     if state.brief:
         n_crit = len(state.brief.criteria)
         if n_crit and len(matrix.rows) < n_crit:
@@ -914,31 +1141,35 @@ def check_gate_2_3(state: TaskState, out: List[Finding]) -> None:
         out.append(Finding("INFO", gate, f"критериев из отклонений 02 ([Откл]): {n_deferred_src}"))
 
 
-def check_gate_3_4(state: TaskState, out: List[Finding]) -> None:
-    """Согласование пакета 02/03/04 Оркестратором — этап 3 (1c-delivery-gate §0).
-
-    Основной источник — артефакт 04a «Лист замечаний» (0.19.0+); штамп в 04 —
-    legacy 0.18.0. Отсутствие согласования — WARN, не ERR: задачи, начатые
-    до введения этапа, прожиты без него, задним числом не блокируем."""
+def check_gate_3_4(state: TaskState, out: List[Finding], code_started: bool = False) -> None:
+    """Согласование пакета 01–04; current блокирует обход, legacy — WARN."""
     gate = "3→4"
     approval = state.approval
     mode = read_conveyor_mode(state.task_dir)
-    dev_started = (state.task_dir / ARTIFACTS[5]).is_file() or bool(state.protocols)
+    profile = read_conveyor_profile(state.task_dir)
+    dev_started = ((state.task_dir / ARTIFACTS[5]).is_file() or bool(state.protocols)
+                   or code_started)
     if approval is None:
-        out.append(Finding("WARN", gate,
-                           "нет согласования пакета 02/03/04 (лист замечаний 04a или legacy-штамп в 04) — "
-                           f"задача начата до 0.19.0 или согласование пропущено; режим каталога: {mode}"))
+        level = "WARN" if profile == "legacy" or not dev_started else "ERR"
+        out.append(Finding(level, gate,
+                           "нет согласования пакета 01–04 (лист замечаний 04a или legacy-штамп в 04) — "
+                           f"режим: {mode}, профиль: {profile}" +
+                           (" — разработка начата без согласования" if level == "ERR" else "")))
         return
     if len(approval.checked) > 1:
         out.append(Finding("ERR", gate, f"в {approval.source} отмечено несколько решений согласования: {approval.checked}"))
     elif approval.decision is None:
-        out.append(Finding("WARN", gate, f"решение согласования в {approval.source} не отмечено (Согласовано / Доработать)"))
+        level = "ERR" if profile == "current" and dev_started else "WARN"
+        out.append(Finding(level, gate, f"решение согласования в {approval.source} не отмечено (Согласовано / Доработать)"))
     elif approval.decision == "Согласовано":
+        revision_error = design_revision_error(state)
+        if revision_error:
+            out.append(Finding("ERR", gate, revision_error))
         if not approval.date:
             out.append(Finding("WARN", gate, f"согласование без даты в {approval.source}"))
         else:
             out.append(Finding("INFO", gate,
-                               f"пакет 02/03/04 согласован ({approval.date}, режим {approval.mode or mode}; {approval.source})"))
+                               f"пакет 01–04 согласован ({approval.date}, режим {approval.mode or mode}; {approval.source})"))
     elif approval.decision == "Доработать":
         if dev_started:
             out.append(Finding("ERR", gate, "разработка начата при решении «Доработать» — возврат на проектирование/требования, без кода до «Согласовано»"))
@@ -969,27 +1200,46 @@ def check_gate_5_6(state: TaskState, out: List[Finding]) -> None:
 
 
 def check_gate_6_7(state: TaskState, out: List[Finding]) -> None:
-    """Код ревью — этап 6 (1c-code-review): проверка кода на стандарты после
-    внутренней приёмки.
-
-    Источник — артефакт 05a «Лист код-ревью» (0.23.0+). Строка «code-review ✅»
-    в шапке 05 источником не является — это самопрогон разработки (гейт 4→5).
-    Отсутствие ревью — WARN, не ERR: задачи, начатые до введения этапа,
-    прожиты без него, задним числом не блокируем (как с 04a в 0.19.0)."""
+    """Код-ревью; current запрещает внешнюю приёмку без одобрения."""
     gate = "6→7"
     review = state.code_review
     mode = read_conveyor_mode(state.task_dir)
+    profile = read_conveyor_profile(state.task_dir)
     ext_started = bool(state.protocols)
+    if profile == "current" and state.matrix and (state.internal or ext_started):
+        pending = [r.num for r in state.matrix.rows if "⏳" in r.status_05]
+        unchecked = [r.num for r in state.matrix.rows
+                     if not r.status_05 or ("☐" in r.status_05)]
+        static_manual = [r.num for r in state.matrix.rows
+                         if "✅с" in r.status_05 and re.search(r"ручн|интеракт", r.check, re.I)]
+        if pending:
+            out.append(Finding("ERR", gate,
+                               f"критерии {fmt_nums(pending)} имеют ⏳ в 05 — задача заблокирована средой проверки; "
+                               "рабочий функционал на внешнюю приёмку не передаётся"))
+        if unchecked:
+            out.append(Finding("ERR", gate,
+                               f"критерии {fmt_nums(unchecked)} не имеют результата внутренней проверки 05"))
+        if static_manual:
+            out.append(Finding("ERR", gate,
+                               f"критерии {fmt_nums(static_manual)} имеют ✅с при ручной/интерактивной проверке — "
+                               "нужен живой прогон или исполняемый автотест"))
     if review is None:
-        out.append(Finding("WARN", gate,
+        level = "WARN" if profile == "legacy" or not ext_started else "ERR"
+        out.append(Finding(level, gate,
                            "нет код ревью — лист 05a-code-review.md не найден — "
-                           f"задача начата до 0.23.0 или ревью пропущено; режим каталога: {mode}"))
+                           f"режим: {mode}, профиль: {profile}" +
+                           (" — внешняя приёмка начата без одобрения" if level == "ERR" else "")))
         return
     if len(review.checked) > 1:
         out.append(Finding("ERR", gate, f"в {review.source} отмечено несколько решений ревью: {review.checked}"))
     elif review.decision is None:
-        out.append(Finding("WARN", gate, f"решение ревью в {review.source} не отмечено (Одобрено / Доработать)"))
+        level = "ERR" if profile == "current" and ext_started else "WARN"
+        out.append(Finding(level, gate, f"решение ревью в {review.source} не отмечено (Одобрено / Доработать)"))
     elif review.decision == "Одобрено":
+        revision_error = code_revision_error(state)
+        if revision_error:
+            level = "WARN" if revision_error.startswith("WARN: ") else "ERR"
+            out.append(Finding(level, gate, revision_error.removeprefix("WARN: ")))
         if not review.date:
             out.append(Finding("WARN", gate, f"ревью без даты в {review.source}"))
         else:
@@ -1079,9 +1329,52 @@ def check_gate_8(state: TaskState, out: List[Finding]) -> None:
                     out.append(Finding("WARN", gate,
                                        "ретроспектива 01 не заполнена (оценка/факт, возвраты, вывод) — "
                                        "петля оценки не закрыта (DoD «8 → закрытие»)"))
+                if (state.brief and read_conveyor_profile(state.task_dir) == "current"
+                        and not state.brief.pipeline_improvements_filled):
+                    out.append(Finding("WARN", gate,
+                                       "в 01 не заполнены «Улучшения пайплайна» — укажите наблюдения и предложения "
+                                       "или явно «не требуются» с причиной"))
 
 
-def cmd_check(task_dir: Path) -> int:
+def check_diff_traceability(state: TaskState, out: List[Finding], diff_ref: str) -> None:
+    """Проверить diff: каждый файл должен быть в 03 и связан с AC в 04."""
+    if read_conveyor_profile(state.task_dir) == "legacy":
+        return
+    spec_path = state.task_dir / ARTIFACTS[3]
+    if not spec_path.is_file() or not state.matrix:
+        out.append(Finding("ERR", "4→5", "для проверки diff нужны спецификация 03 и матрица 04"))
+        return
+    root_result = _git(state.task_dir, ["rev-parse", "--show-toplevel"])
+    if not root_result:
+        out.append(Finding("ERR", "4→5", "--diff: git-репозиторий не найден"))
+        return
+    root = Path(root_result.stdout.strip())
+    task_rel = state.task_dir.resolve().relative_to(root.resolve()).as_posix()
+    if task_rel == ".":
+        names = list(ARTIFACTS.values()) + [DESIGN_REVIEW, CODE_REVIEW, REWORK_LIST, PROTOCOL_GLOB]
+        excludes = [f":(exclude){name}" for name in names]
+    else:
+        excludes = [f":(exclude){task_rel}/**"]
+    excludes.append(":(exclude)docs/delivery/_releases/**")
+    result = _git(root, ["diff", "--name-only", diff_ref, "--", "."] + excludes)
+    if not result:
+        out.append(Finding("ERR", "4→5", f"--diff: не удалось получить diff от {diff_ref}"))
+        return
+    spec = read_text(spec_path)
+    changed = [x for x in result.stdout.splitlines() if x.strip()]
+    for filename in changed:
+        normalized = filename.lstrip("./")
+        basename = Path(filename).name
+        if normalized not in spec and basename not in spec:
+            out.append(Finding("ERR", "4→5", f"файл {filename} отсутствует в границах 03"))
+            continue
+        if not any(normalized in r.obj or basename in r.obj for r in state.matrix.rows):
+            out.append(Finding("ERR", "4→5",
+                               f"файл {filename} не связан ни с одним AC в колонке «Объект/код» матрицы 04"))
+    out.append(Finding("INFO", "4→5", f"проверен diff {diff_ref}: файлов {len(changed)}"))
+
+
+def cmd_check(task_dir: Path, diff_ref: str = "") -> int:
     state = load_state(task_dir)
     if not state.brief and not state.matrix and not state.internal and not state.protocols:
         print(f"❌ {task_dir}: не найдено артефактов конвейера (01–06)")
@@ -1089,12 +1382,14 @@ def cmd_check(task_dir: Path) -> int:
     out: List[Finding] = []
     check_gate_1_2(state, out)
     check_gate_2_3(state, out)
-    check_gate_3_4(state, out)
+    check_gate_3_4(state, out, code_started=bool(diff_ref))
     check_gate_4_5(state, out)
     check_gate_5_6(state, out)
     check_gate_6_7(state, out)
     check_gate_7_8(state, out)
     check_gate_8(state, out)
+    if diff_ref:
+        check_diff_traceability(state, out, diff_ref)
 
     icons = {"ERR": "❌", "WARN": "🟡", "INFO": "✅"}
     for gate in ("1→2", "2→3", "3→4", "4→5", "5→6", "6→7", "7→8", "8"):
@@ -1114,24 +1409,44 @@ def cmd_check(task_dir: Path) -> int:
 # --- CLI ---------------------------------------------------------------------
 
 USAGE = """Использование:
-  python3 scripts/delivery_tools.py status <каталог-задачи>
-  python3 scripts/delivery_tools.py check  <каталог-задачи>
-  python3 scripts/delivery_tools.py roadmap <каталог-доставки>
+  python3 scripts/delivery_tools.py status   <каталог-задачи>
+  python3 scripts/delivery_tools.py check    <каталог-задачи> [--diff <git-ref>]
+  python3 scripts/delivery_tools.py revision <каталог-задачи>
+  python3 scripts/delivery_tools.py roadmap  <каталог-доставки>
 
-status  — сводка состояния задачи по артефактам 01–06 (этап, статусы матрицы,
-          согласование Оркестратора, код ревью, красные строки, решение
-          протокола, релиз, следующий шаг).
-check   — механическая проверка DoD-гейтов (exit 1 при ERR). Каталог задачи —
-          обычно docs/delivery/<ID-задачи> проекта.
-roadmap — сводка всех задач и эпиков каталога доставки (обычно docs/delivery):
-          этап конвейера и решение протокола каждой задачи, связь с эпиками
-          (1c-epic-planning). Статусы вместо памяти."""
+status   — сводка состояния задачи по артефактам 01–06 (этап, статусы матрицы,
+           согласование Оркестратора, код ревью, красные строки, решение
+           протокола, релиз, следующий шаг).
+check    — механическая проверка DoD-гейтов (exit 1 при ERR). Каталог задачи —
+           обычно docs/delivery/<ID-задачи> проекта.
+revision — SHA-256 смыслового пакета 01–04 для 04a и текущий git commit для 05a.
+roadmap  — сводка всех задач и эпиков каталога доставки (обычно docs/delivery):
+           этап конвейера и решение протокола каждой задачи, связь с эпиками
+           (1c-epic-planning). Статусы вместо памяти."""
+
+
+def cmd_revision(task_dir: Path) -> int:
+    revision = package_revision(task_dir)
+    if not revision:
+        print("❌ для ревизии нужны заполненные файлы 01-task-brief.md, 02-execution-scenario.md, "
+              "03-change-spec.md и 04-acceptance-criteria.md")
+        return 1
+    print(f"Ревизия пакета 01–04: {revision}")
+    commit = current_git_commit(task_dir)
+    print(f"Проверенный commit: {commit}" if commit else "Проверенный commit: git-репозиторий не найден")
+    return 0
 
 
 def main(argv: List[str]) -> int:
-    if len(argv) != 3 or argv[1] not in ("status", "check", "roadmap"):
+    if len(argv) not in (3, 5) or argv[1] not in ("status", "check", "roadmap", "revision"):
         print(USAGE)
         return 2
+    diff_ref = ""
+    if len(argv) == 5:
+        if argv[1] != "check" or argv[3] != "--diff":
+            print(USAGE)
+            return 2
+        diff_ref = argv[4]
     task_dir = Path(argv[2])
     if not task_dir.is_dir():
         print(f"❌ каталог не найден: {task_dir}")
@@ -1140,7 +1455,9 @@ def main(argv: List[str]) -> int:
         return cmd_status(task_dir)
     if argv[1] == "roadmap":
         return cmd_roadmap(task_dir)
-    return cmd_check(task_dir)
+    if argv[1] == "revision":
+        return cmd_revision(task_dir)
+    return cmd_check(task_dir, diff_ref)
 
 
 if __name__ == "__main__":

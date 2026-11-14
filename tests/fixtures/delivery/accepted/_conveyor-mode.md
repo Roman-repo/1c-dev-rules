@@ -1,0 +1,2 @@
+mode: manual
+profile: legacy
