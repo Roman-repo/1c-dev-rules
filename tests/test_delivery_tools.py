@@ -331,14 +331,14 @@ class TestOrchestratorApproval(unittest.TestCase):
 
     BRIEF = (
         "# Карточка задачи — TASK-T1: Сделать что-то\n\n"
-        "## Критерии успеха\n\n| № | Критерий | Как проверим |\n|---|---|---|\n| 1 | к | п |\n\n"
+        "## Критерии успеха\n\n| № | Критерий | Как проверим |\n|---|---|---|\n| FR-01 | к | п |\n\n"
         "## Подтверждение инициатора\n\n- [x] цель подтверждена\n"
     )
     MATRIX = (
         "## Матрица трассировки и критерии приёмки\n\n"
-        "| № | Критерий (проверяемо) | Шаг сценария | Объект/код (03) | Проверка | Статус 05 | Статус 06 |\n"
-        "|---|---|---|---|---|---|---|\n"
-        "| 1 | критерий | 1 | форма | ручная | ☐ | ☐ |\n\n"
+        "| AC-ID | Требование | Критерий (проверяемо) | Шаг сценария | Объект/код (03) | Проверка | Статус 05 | Статус 06 |\n"
+        "|---|---|---|---|---|---|---|---|\n"
+        "| AC-01 | FR-01 | критерий | 1 | форма | ручная | ☐ | ☐ |\n\n"
     )
     REVIEW_OK = (
         "# Лист замечаний согласования — TASK-T1\n\n"
@@ -346,6 +346,7 @@ class TestOrchestratorApproval(unittest.TestCase):
         "- [x] **Согласовано** — пакет принят\n"
         "- [ ] **Доработать** — замечания\n\n"
         "**Режим согласования:** manual\n**Дата:** 2026-08-23\n"
+        "**Ревизия пакета 01–04:** <PACKAGE_REVISION>\n"
     )
     REVIEW_REWORK = (
         "# Лист замечаний согласования — TASK-T1\n\n"
@@ -362,22 +363,23 @@ class TestOrchestratorApproval(unittest.TestCase):
     )
 
     def make_task(self, tmp: str, review: str = "", legacy_stamp: str = "",
-                  with_internal: bool = False, mode: str = None) -> Path:
+                  with_internal: bool = False, mode: str = None, profile: str = None) -> Path:
         root = Path(tmp) / "delivery"
         task = root / "TASK-T1"
         task.mkdir(parents=True)
         (task / "01-task-brief.md").write_text(self.BRIEF, encoding="utf-8")
-        (task / "02-execution-scenario.md").write_text("# С\n", encoding="utf-8")
-        (task / "03-change-spec.md").write_text("# Сп\n", encoding="utf-8")
+        (task / "02-execution-scenario.md").write_text("# С\n\nПокрытие: FR-01\n", encoding="utf-8")
+        (task / "03-change-spec.md").write_text("# Сп\n\nформа\n", encoding="utf-8")
         (task / "04-acceptance-criteria.md").write_text(
             "# К\n\n" + self.MATRIX + legacy_stamp, encoding="utf-8")
         if review:
+            review = review.replace("<PACKAGE_REVISION>", dt.package_revision(task))
             (task / "04a-design-review.md").write_text(review, encoding="utf-8")
         if with_internal:
             (task / "05-internal-acceptance.md").write_text("# П\n", encoding="utf-8")
-        if mode is not None:
+        if mode is not None or profile is not None:
             (root / "_conveyor-mode.md").write_text(
-                f"<!-- Режим конвейера -->\nmode: {mode}\nupdated: 2026-08-23\n", encoding="utf-8")
+                f"mode: {mode or 'manual'}\nprofile: {profile or 'current'}\nupdated: 2026-08-23\n", encoding="utf-8")
         return task
 
     def test_approved_review_passes_gate(self):
@@ -385,7 +387,7 @@ class TestOrchestratorApproval(unittest.TestCase):
             task = self.make_task(tmp, self.REVIEW_OK)
             code, out = run_cli("check", task)
             self.assertEqual(code, 0)
-            self.assertIn("пакет 02/03/04 согласован (2026-08-23, режим manual; 04a)", out)
+            self.assertIn("пакет 01–04 согласован (2026-08-23, режим manual; 04a)", out)
             self.assertIn("ERR 0", out)
             code, out = run_cli("status", task)
             self.assertEqual(code, 0)
@@ -404,22 +406,27 @@ class TestOrchestratorApproval(unittest.TestCase):
         self.assertIn('3 «Согласование»', out)
         self.assertIn("без кода до повторного согласования", out)
 
-    def test_missing_review_is_warn_not_err(self):
-        """Задачи до 0.19.0: ни 04a, ни штампа — WARN, конвейер не блокируется."""
+    def test_missing_review_blocks_started_dev_in_current(self):
         with tempfile.TemporaryDirectory() as tmp:
             task = self.make_task(tmp, with_internal=True)
             code, out = run_cli("check", task)
+        self.assertEqual(code, 1)
+        self.assertIn("разработка начата без согласования", out)
+
+    def test_missing_review_stays_warn_in_explicit_legacy(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            task = self.make_task(tmp, with_internal=True, profile="legacy")
+            code, out = run_cli("check", task)
         self.assertEqual(code, 0)
-        self.assertIn("нет согласования пакета 02/03/04", out)
+        self.assertIn("нет согласования пакета 01–04", out)
         self.assertIn("ERR 0", out)
 
     def test_unapproved_package_blocks_dev_next_step(self):
-        """Пакет есть, согласования нет → следующий шаг — согласование, не разработка."""
         with tempfile.TemporaryDirectory() as tmp:
             task = self.make_task(tmp)
             code, out = run_cli("status", task)
         self.assertEqual(code, 0)
-        self.assertIn("этап 3 Согласование (режим manual): предъявить пакет 02/03/04 Оркестратору", out)
+        self.assertIn("этап 3 Согласование (режим manual): предъявить пакет 01–04", out)
         self.assertNotIn("Разработка (1c-dispatch-gate)", out)
 
     def test_rework_decision_with_dev_started_is_err(self):
@@ -429,25 +436,39 @@ class TestOrchestratorApproval(unittest.TestCase):
         self.assertEqual(code, 1)
         self.assertIn("разработка начата при решении «Доработать»", out)
         with tempfile.TemporaryDirectory() as tmp:
-            task = self.make_task(tmp, self.REVIEW_REWORK)      # кода ещё нет
+            task = self.make_task(tmp, self.REVIEW_REWORK)
             code, out = run_cli("check", task)
         self.assertEqual(code, 0)
         self.assertIn("без кода до повторного согласования", out)
 
-    def test_legacy_stamp_in_04_is_fallback(self):
-        """Штамп 0.18.0 в секции 04 читается, когда 04a нет; 04a сильнее."""
+    def test_package_change_invalidates_approval_but_status_does_not(self):
         with tempfile.TemporaryDirectory() as tmp:
-            task = self.make_task(tmp, legacy_stamp=self.LEGACY_STAMP_OK)
+            task = self.make_task(tmp, self.REVIEW_OK)
+            matrix = task / "04-acceptance-criteria.md"
+            matrix.write_text(read_text := matrix.read_text(encoding="utf-8").replace("☐ | ☐", "✅ | ☐"), encoding="utf-8")
+            state = dt.load_state(task)
+            self.assertEqual(dt.design_revision_error(state), "")
+            (task / "03-change-spec.md").write_text("# Сп\n\nизменено после согласования\n", encoding="utf-8")
+            state = dt.load_state(task)
+            self.assertIn("Требуется повторно", dt.design_revision_error(state))
+            code, out = run_cli("check", task)
+            self.assertEqual(code, 1)
+            self.assertIn("изменился после согласования", out)
+
+    def test_legacy_stamp_in_04_is_fallback(self):
+        """Исторический штамп читается только в явном legacy-профиле."""
+        with tempfile.TemporaryDirectory() as tmp:
+            task = self.make_task(tmp, legacy_stamp=self.LEGACY_STAMP_OK, profile="legacy")
             code, out = run_cli("check", task)
             self.assertEqual(code, 0)
-            self.assertIn("04 (0.18.0)", out)                   # источник — legacy
+            self.assertIn("04 (0.18.0)", out)
             code, out = run_cli("status", task)
             self.assertIn("Разработка (1c-dispatch-gate)", out)
         with tempfile.TemporaryDirectory() as tmp:
-            task = self.make_task(tmp, review=self.REVIEW_REWORK, legacy_stamp=self.LEGACY_STAMP_OK)
+            task = self.make_task(tmp, review=self.REVIEW_REWORK, legacy_stamp=self.LEGACY_STAMP_OK, profile="legacy")
             code, out = run_cli("check", task)
         self.assertEqual(code, 0)
-        self.assertIn("без кода до повторного согласования", out)  # 04a («Доработать») перекрыл штамп в 04
+        self.assertIn("без кода до повторного согласования", out)
 
     def test_mode_file_overrides_default(self):
         """_conveyor-mode.md: auto меняет режим в выводе; нет файла — manual."""
@@ -467,7 +488,7 @@ class TestOrchestratorApproval(unittest.TestCase):
             task = self.make_task(tmp, review_auto, mode="manual")
             code, out = run_cli("check", task)
         self.assertEqual(code, 0)
-        self.assertIn("пакет 02/03/04 согласован (2026-08-23, режим auto; 04a)", out)
+        self.assertIn("пакет 01–04 согласован (2026-08-23, режим auto; 04a)", out)
 
 
 class TestCodeReviewStage(unittest.TestCase):
@@ -480,14 +501,14 @@ class TestCodeReviewStage(unittest.TestCase):
 
     BRIEF = (
         "# Карточка задачи — TASK-T1: Сделать что-то\n\n"
-        "## Критерии успеха\n\n| № | Критерий | Как проверим |\n|---|---|---|\n| 1 | к | п |\n\n"
+        "## Критерии успеха\n\n| № | Критерий | Как проверим |\n|---|---|---|\n| FR-01 | к | п |\n\n"
         "## Подтверждение инициатора\n\n- [x] цель подтверждена\n"
     )
     MATRIX = (
         "## Матрица трассировки и критерии приёмки\n\n"
-        "| № | Критерий (проверяемо) | Шаг сценария | Объект/код (03) | Проверка | Статус 05 | Статус 06 |\n"
-        "|---|---|---|---|---|---|---|\n"
-        "| 1 | критерий | 1 | форма | ручная | ☐ | ☐ |\n\n"
+        "| AC-ID | Требование | Критерий (проверяемо) | Шаг сценария | Объект/код (03) | Проверка | Статус 05 | Статус 06 |\n"
+        "|---|---|---|---|---|---|---|---|\n"
+        "| AC-01 | FR-01 | критерий | 1 | форма | ручная | ✅ | ☐ |\n\n"
     )
     APPROVAL = (
         "# Лист замечаний согласования — TASK-T1\n\n"
@@ -495,6 +516,7 @@ class TestCodeReviewStage(unittest.TestCase):
         "- [x] **Согласовано** — пакет принят\n"
         "- [ ] **Доработать** — замечания\n\n"
         "**Режим согласования:** manual\n**Дата:** 2026-08-23\n"
+        "**Ревизия пакета 01–04:** <PACKAGE_REVISION>\n"
     )
     INTERNAL = (
         "# Отчёт внутренней приёмки — TASK-T1\n\n"
@@ -507,6 +529,7 @@ class TestCodeReviewStage(unittest.TestCase):
         "- [x] **Одобрено** — код прошёл ревью\n"
         "- [ ] **Доработать** — замечания\n\n"
         "**Режим ревью:** manual\n**Ревьюер:** Тест\n**Дата:** 2026-08-24\n"
+        "**Проверенный commit:** <CODE_REVISION>\n"
     )
     REVIEW_REWORK = (
         "# Лист код-ревью — TASK-T1\n\n"
@@ -521,23 +544,25 @@ class TestCodeReviewStage(unittest.TestCase):
     )
 
     def make_task(self, tmp: str, review: str = "", protocol: str = "",
-                  mode: str = None) -> Path:
+                  mode: str = None, profile: str = None, matrix: str = None) -> Path:
         root = Path(tmp) / "delivery"
         task = root / "TASK-T1"
         task.mkdir(parents=True)
         (task / "01-task-brief.md").write_text(self.BRIEF, encoding="utf-8")
-        (task / "02-execution-scenario.md").write_text("# С\n", encoding="utf-8")
-        (task / "03-change-spec.md").write_text("# Сп\n", encoding="utf-8")
-        (task / "04-acceptance-criteria.md").write_text("# К\n\n" + self.MATRIX, encoding="utf-8")
-        (task / "04a-design-review.md").write_text(self.APPROVAL, encoding="utf-8")
+        (task / "02-execution-scenario.md").write_text("# С\n\nПокрытие: FR-01\n", encoding="utf-8")
+        (task / "03-change-spec.md").write_text("# Сп\n\nформа\n", encoding="utf-8")
+        (task / "04-acceptance-criteria.md").write_text("# К\n\n" + (matrix or self.MATRIX), encoding="utf-8")
+        approval = self.APPROVAL.replace("<PACKAGE_REVISION>", dt.package_revision(task))
+        (task / "04a-design-review.md").write_text(approval, encoding="utf-8")
         (task / "05-internal-acceptance.md").write_text(self.INTERNAL, encoding="utf-8")
         if review:
+            review = review.replace("<CODE_REVISION>", "a" * 40)
             (task / "05a-code-review.md").write_text(review, encoding="utf-8")
         if protocol:
             (task / "06-acceptance-protocol.md").write_text(protocol, encoding="utf-8")
-        if mode is not None:
+        if mode is not None or profile is not None:
             (root / "_conveyor-mode.md").write_text(
-                f"<!-- Режим конвейера -->\nmode: {mode}\nupdated: 2026-08-24\n", encoding="utf-8")
+                f"mode: {mode or 'manual'}\nprofile: {profile or 'current'}\nupdated: 2026-08-24\n", encoding="utf-8")
         return task
 
     def test_approved_review_opens_external_acceptance(self):
@@ -632,6 +657,153 @@ class TestCodeReviewStage(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             state = dt.load_state(self.make_task(tmp, self.REVIEW_OK, protocol=self.PROTOCOL))
             self.assertEqual(dt.stage_reached(state), 8)   # «Принято» сразу закрывает лестницу
+
+
+class TestPipelineMaturity119(unittest.TestCase):
+    """Регрессионные проверки строгого конвейера Issue #119."""
+
+    def setUp(self):
+        self.design = TestOrchestratorApproval()
+        self.code = TestCodeReviewStage()
+
+    def test_question_registry_blocks_open_and_accepts_disposition(self):
+        registry = (
+            "## Реестр вопросов\n\n"
+            "| ID | Вопрос | На что влияет | Блокирует | Ответственный | Статус | Решение |\n"
+            "|---|---|---|---|---|---|---|\n"
+            "| Q-01 | Что делать? | FR-01 | Да | Заказчик | {status} | {resolution} |\n\n"
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            task = self.design.make_task(tmp)
+            brief = task / "01-task-brief.md"
+            text = brief.read_text(encoding="utf-8").replace(
+                "## Подтверждение инициатора",
+                registry.format(status="Ожидает ответа", resolution="—") + "## Подтверждение инициатора",
+            )
+            brief.write_text(text, encoding="utf-8")
+            code, out = run_cli("check", task)
+            self.assertEqual(code, 1)
+            self.assertIn("блокирующий вопрос Q-01 не закрыт", out)
+            brief.write_text(text.replace("Ожидает ответа", "Закрыт").replace("| — |", "| Делать по FR-01 |"), encoding="utf-8")
+            code, out = run_cli("check", task)
+            self.assertEqual(code, 0)
+            self.assertIn("ERR 0", out)
+
+    def test_missing_code_review_with_protocol_is_err_only_current(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            task = self.code.make_task(tmp, protocol=self.code.PROTOCOL)
+            code, out = run_cli("check", task)
+            self.assertEqual(code, 1)
+            self.assertIn("внешняя приёмка начата без одобрения", out)
+        with tempfile.TemporaryDirectory() as tmp:
+            task = self.code.make_task(tmp, protocol=self.code.PROTOCOL, profile="legacy")
+            code, out = run_cli("check", task)
+            self.assertEqual(code, 0)
+            self.assertIn("нет код ревью", out)
+
+    def test_deferred_and_static_manual_criteria_block_external(self):
+        pending = self.code.MATRIX.replace("| ✅ | ☐ |", "| ⏳ | ☐ |")
+        with tempfile.TemporaryDirectory() as tmp:
+            task = self.code.make_task(tmp, self.code.REVIEW_OK, matrix=pending)
+            code, out = run_cli("check", task)
+            self.assertEqual(code, 1)
+            self.assertIn("Заблокирована средой проверки", run_cli("status", task)[1])
+            self.assertIn("имеют ⏳ в 05", out)
+        static_manual = self.code.MATRIX.replace("| ✅ | ☐ |", "| ✅с | ☐ |")
+        with tempfile.TemporaryDirectory() as tmp:
+            task = self.code.make_task(tmp, self.code.REVIEW_OK, matrix=static_manual)
+            code, out = run_cli("check", task)
+            self.assertEqual(code, 1)
+            self.assertIn("нужен живой прогон или исполняемый автотест", out)
+
+    def test_missing_reviewed_commit_is_err(self):
+        review = self.code.REVIEW_OK.replace("**Проверенный commit:** <CODE_REVISION>\n", "")
+        with tempfile.TemporaryDirectory() as tmp:
+            task = self.code.make_task(tmp, review)
+            code, out = run_cli("check", task)
+            self.assertEqual(code, 1)
+            self.assertIn("не зафиксирован «Проверенный commit»", out)
+
+    def test_code_change_after_review_requires_new_review(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            task = self.code.make_task(tmp, self.code.REVIEW_OK)
+            self.assertTrue(dt._git(task, ["init", "-q"]))
+            self.assertTrue(dt._git(task, ["config", "user.email", "test@example.com"]))
+            self.assertTrue(dt._git(task, ["config", "user.name", "Test"]))
+            source = task / "src" / "Module.bsl"
+            source.parent.mkdir(parents=True)
+            source.write_text("Процедура Тест() КонецПроцедуры\n", encoding="utf-8")
+            self.assertTrue(dt._git(task, ["add", "."]))
+            self.assertTrue(dt._git(task, ["commit", "-q", "-m", "initial"]))
+            commit = dt.current_git_commit(task)
+            review = task / "05a-code-review.md"
+            review.write_text(review.read_text(encoding="utf-8").replace("a" * 40, commit), encoding="utf-8")
+            self.assertEqual(dt.code_revision_error(dt.load_state(task)), "")
+            source.write_text("Процедура Тест() // изменено\nКонецПроцедуры\n", encoding="utf-8")
+            self.assertIn("Требуется повторно", dt.code_revision_error(dt.load_state(task)))
+
+    def test_revision_command_and_fr_ac_validation(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            task = self.design.make_task(tmp, self.design.REVIEW_OK)
+            code, out = run_cli("revision", task)
+            self.assertEqual(code, 0)
+            self.assertIn("Ревизия пакета 01–04: sha256:", out)
+            matrix = task / "04-acceptance-criteria.md"
+            matrix.write_text(matrix.read_text(encoding="utf-8").replace("| AC-01 | FR-01 |", "| AC-01 | FR-99 |"), encoding="utf-8")
+            code, out = run_cli("check", task)
+            self.assertEqual(code, 1)
+            self.assertIn("неизвестный FR-99", out)
+            self.assertIn("FR-01 из 01 не имеет критерия", out)
+
+    def test_diff_file_must_be_in_spec_and_linked_to_ac(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            task = self.code.make_task(tmp, self.code.REVIEW_OK)
+            self.assertTrue(dt._git(task, ["init", "-q"]))
+            self.assertTrue(dt._git(task, ["config", "user.email", "test@example.com"]))
+            self.assertTrue(dt._git(task, ["config", "user.name", "Test"]))
+            source = task / "src" / "Module.bsl"
+            source.parent.mkdir(parents=True)
+            source.write_text("Процедура Тест() КонецПроцедуры\n", encoding="utf-8")
+            self.assertTrue(dt._git(task, ["add", "."]))
+            self.assertTrue(dt._git(task, ["commit", "-q", "-m", "initial"]))
+            source.write_text("// новый diff\n" + source.read_text(encoding="utf-8"), encoding="utf-8")
+            state = dt.load_state(task)
+            findings = []
+            dt.check_diff_traceability(state, findings, "HEAD")
+            self.assertTrue(any(f.level == "ERR" and "отсутствует в границах 03" in f.message for f in findings))
+            (task / "03-change-spec.md").write_text("# Сп\n\nsrc/Module.bsl\n", encoding="utf-8")
+            matrix = task / "04-acceptance-criteria.md"
+            matrix.write_text(matrix.read_text(encoding="utf-8").replace("| форма |", "| src/Module.bsl |"), encoding="utf-8")
+            state = dt.load_state(task)
+            findings = []
+            dt.check_diff_traceability(state, findings, "HEAD")
+            self.assertFalse(any(f.level == "ERR" for f in findings), findings)
+            (task / "04a-design-review.md").unlink()
+            state = dt.load_state(task)
+            findings = []
+            dt.check_gate_3_4(state, findings, code_started=True)
+            self.assertTrue(any(f.level == "ERR" and "разработка начата без согласования" in f.message
+                                for f in findings))
+
+    def test_light_profile_only_for_s_and_pipeline_improvement_detection(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            task = self.design.make_task(tmp)
+            brief = task / "01-task-brief.md"
+            text = brief.read_text(encoding="utf-8").replace(
+                "\n\n## Критерии успеха",
+                "\n\n- **Профиль документации:** light\n- **Оценка:** M\n\n## Критерии успеха",
+            )
+            brief.write_text(text, encoding="utf-8")
+            code, out = run_cli("check", task)
+            self.assertEqual(code, 1)
+            self.assertIn("light допустим только для задачи класса S", out)
+            brief.write_text(text.replace("**Оценка:** M", "**Оценка:** S") +
+                             "\n## Ретроспектива\n\n| Поле | Значение |\n|---|---|\n| Вывод | ok |\n\n"
+                             "### Улучшения пайплайна\n\nУлучшения не требуются: отклонений не было.\n",
+                             encoding="utf-8")
+            parsed = dt.parse_brief(brief)
+            self.assertTrue(parsed.retrospective_filled)
+            self.assertTrue(parsed.pipeline_improvements_filled)
 
 
 if __name__ == "__main__":
